@@ -327,7 +327,7 @@ with st.sidebar:
 
     st.subheader("Medidas")
     pw   = st.number_input("Ancho de placa (m)",      value=0.20,  step=0.01,  min_value=0.05)
-    kerf = st.number_input("Pérdida sierra (m)",       value=0.00001, step=0.0001, format="%.3f")
+    kerf = st.number_input("Pérdida sierra (m)",       value=0.0001, step=0.0001, format="%.3f")
     ms   = st.number_input("Separación montantes (m)", value=0.60,  step=0.05)
     sm2  = st.number_input("Tornillos por m²",         value=12,    step=1,     min_value=1)
 
