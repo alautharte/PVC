@@ -326,8 +326,8 @@ with st.sidebar:
     lens   = [l for l, u in [(4, usar_4), (5, usar_5), (6, usar_6)] if u]
 
     st.subheader("Medidas")
-    pw   = st.number_input("Ancho de placa (m)",      value=0.20,  step=0.01,  min_value=0.05)
-    kerf = st.number_input("Pérdida sierra (m)",       value=0.001, step=0.001, format="%.3f")
+    pw   = st.number_input("Ancho de placa (m)",      value=0.25,  step=0.01,  min_value=0.05)
+    kerf = st.number_input("Pérdida sierra (m)",       value=0.003, step=0.001, format="%.3f")
     ms   = st.number_input("Separación montantes (m)", value=0.60,  step=0.05)
     sm2  = st.number_input("Tornillos por m²",         value=12,    step=1,     min_value=1)
 
