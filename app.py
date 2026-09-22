@@ -41,7 +41,8 @@ SEP_MAESTRAS     = 1.20   # m entre vigas maestras
 SEP_VELAS        = 1.00   # m entre velas de suspensión
 SEP_MONTANTES    = 0.45   # m entre montantes
 DIST_TARUGOS     = 0.50   # m entre tarugos en pared
-TORNILLOS_M2     = 30     # tornillos T2 por m²
+TORNILLOS_T1_M2  = 12     # tornillos T1 por m² — fijación de placas PVC
+TORNILLOS_T2_M2  =  5     # tornillos T2 por m² — unión de perfiles metálicos
 
 st.title("🏠 Presupuestador Cielorrasos PVC")
 st.caption("Optimización global de corte — mezcla de largos, colores por habitación, reutilización de sobrantes entre habitaciones")
@@ -73,7 +74,7 @@ def resolver_corte(piezas, lens, kerf):
         sobrantes.sort(key=lambda s: s["libre"])
         usado = False
         for s in sobrantes:
-            if s["libre"] >= p["dim"] - 0.0001:
+            if s["libre"] >= p["dim"] - kerf:
                 bin_ = plan[s["plan_idx"]]
                 bin_["cortes"].append({"dim": p["dim"], "hab_idx": p["hab_idx"]})
                 s["libre"]    = max(0.0, s["libre"] - p["dim"] - kerf)
@@ -143,7 +144,9 @@ def calcular_estructura(largo, ancho, altura):
     # D. Tornillería y fijaciones
     fijaciones_pared = math.ceil(P / DIST_TARUGOS)
     total_tarugos_n8 = fijaciones_pared + total_velas
-    total_tornillos  = math.ceil(largo * ancho * TORNILLOS_M2)
+    area = largo * ancho
+    total_t1 = math.ceil(area * TORNILLOS_T1_M2)
+    total_t2 = math.ceil(area * TORNILLOS_T2_M2)
 
     return {
         "perimetro":        round(P, 2),
@@ -157,7 +160,8 @@ def calcular_estructura(largo, ancho, altura):
         "lineas_montantes": lineas_montantes,
         "total_molduras":   total_molduras,
         "total_tarugos_n8": total_tarugos_n8,
-        "total_tornillos":  total_tornillos,
+        "total_t1": total_t1,
+        "total_t2": total_t2,
     }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -238,15 +242,16 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     tot_mon  = sum(e["total_montantes"] for e in estructuras.values())
     tot_mol  = sum(e["total_molduras"]  for e in estructuras.values())
     tot_tar  = sum(e["total_tarugos_n8"] for e in estructuras.values())
-    tot_torn = sum(e["total_tornillos"]  for e in estructuras.values())
+    tot_t1 = sum(e["total_t1"] for e in estructuras.values())
+    tot_t2 = sum(e["total_t2"] for e in estructuras.values())
 
     res_data = [
         ["Área total","Placas PVC","m² comprados","m² desperdicio","Desp. %"],
         [f"{total_area:.2f} m²", desc_mezcla,
          f"{m2_comprados:.2f} m²", f"{m2_desperdiciados:.2f} m²", f"{pct_desp:.1f}%"],
-        ["Soleras (2.6m)","Montantes (2.6m)","Molduras PVC (4m)","Tarugos N°8","Tornillos T2"],
+        ["Soleras (2.6m)","Montantes (2.6m)","Molduras PVC (4m)","Tarugos N°8","Torn. T1 (placas)","Torn. T2 (perfiles)"],
         [f"{tot_sol} un.", f"{tot_mon} un.", f"{tot_mol} un.",
-         f"{tot_tar} un.", f"{tot_torn} un."],
+         f"{tot_tar} un.", f"{tot_t1} un.", f"{tot_t2} un."],
     ]
     if costo_total > 0:
         res_data[0].append("Costo estimado")
@@ -277,7 +282,7 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     # ── DETALLE ESTRUCTURA POR HABITACIÓN ───────────────────────────
     story.append(Paragraph("DETALLE DE ESTRUCTURA POR HABITACIÓN", s_sub))
 
-    eh = ["Habitación","Dim.","Altura","Soleras","Montantes","Molduras","Tarugos N°8","Tornillos T2"]
+    eh = ["Habitación","Dim.","Altura","Soleras","Montantes","Molduras","Tarugos N°8","T1 (placas)","T2 (perfiles)"]
     erows = [eh]
     for h in habs:
         nom = h["nombre"]
@@ -290,9 +295,10 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
             str(e["total_montantes"]),
             str(e["total_molduras"]),
             str(e["total_tarugos_n8"]),
-            str(e["total_tornillos"]),
+            str(e["total_t1"]),
+            str(e["total_t2"]),
         ])
-    ew = [W*0.18,W*0.12,W*0.09,W*0.10,W*0.12,W*0.11,W*0.14,W*0.14]
+    ew = [W*0.16,W*0.11,W*0.08,W*0.09,W*0.10,W*0.10,W*0.12,W*0.12,W*0.12]
     t_est = Table(erows, colWidths=ew, repeatRows=1)
     t_est.setStyle(TableStyle([
         ("BACKGROUND",   (0,0),(-1,0), NAVY),
@@ -437,7 +443,8 @@ with st.sidebar:
     psol   = st.number_input("Solera ($ / un)",      value=0.0, step=100.0, format="%.0f")
     pmont  = st.number_input("Montante ($ / un)",    value=0.0, step=100.0, format="%.0f")
     ptarug = st.number_input("Tarugo N°8 ($ / un)",  value=0.0, step=10.0,  format="%.0f")
-    ptorn  = st.number_input("Tornillo T2 ($ / un)", value=0.0, step=10.0,  format="%.0f")
+    ptorn_t1 = st.number_input("Tornillo T1 — placas ($ / un)", value=0.0, step=10.0, format="%.0f")
+    ptorn_t2 = st.number_input("Tornillo T2 — perfiles ($ / un)", value=0.0, step=10.0, format="%.0f")
     precios = {4:p4, 5:p5, 6:p6}
 
 # ═══════════════════════════════════════════════════════════════════
@@ -549,13 +556,14 @@ tot_sol  = sum(e["total_soleras"]   for e in estructuras.values())
 tot_mon  = sum(e["total_montantes"] for e in estructuras.values())
 tot_mol  = sum(e["total_molduras"]  for e in estructuras.values())
 tot_tar  = sum(e["total_tarugos_n8"] for e in estructuras.values())
-tot_torn = sum(e["total_tornillos"]  for e in estructuras.values())
+tot_t1 = sum(e["total_t1"] for e in estructuras.values())
+tot_t2 = sum(e["total_t2"] for e in estructuras.values())
 total_perim = sum(e["perimetro"] for e in estructuras.values())
 
 # Costo
 costo_placas = sum(conteo[l]*precios[l] for l in [4,5,6])
 costo_total  = (costo_placas + tot_mol*pperim + tot_sol*psol +
-                tot_mon*pmont + tot_tar*ptarug + tot_torn*ptorn)
+                tot_mon*pmont + tot_tar*ptarug + tot_t1*ptorn_t1 + tot_t2*ptorn_t2)
 
 # ═══════════════════════════════════════════════════════════════════
 # MÉTRICAS
@@ -577,7 +585,9 @@ ca.metric("✅ m² aprovechados",     f"{m2_aprovechados:.2f} m²")
 cb.metric("❌ m² de desperdicio",   f"{m2_desperdiciados:.2f} m²",
           delta=f"-{pct_desp:.1f}%", delta_color="inverse")
 cc.metric("📦 m² comprados",        f"{m2_comprados:.2f} m²")
-cd.metric("🔩 Tornillos T2",        f"{tot_torn} un.")
+ce, cf = st.columns(2)
+ce.metric("🔩 Tornillos T1 (placas)",   f"{tot_t1} un.")
+cf.metric("🔧 Tornillos T2 (perfiles)", f"{tot_t2} un.")
 
 if costo_total > 0:
     st.metric("💰 Costo estimado total", f"${costo_total:,.0f}")
@@ -602,7 +612,8 @@ for h in habs:
         "Montantes":     e["total_montantes"],
         "Molduras PVC":  e["total_molduras"],
         "Tarugos N°8":   e["total_tarugos_n8"],
-        "Tornillos T2":  e["total_tornillos"],
+        "Torn. T1 (placas)":   e["total_t1"],
+        "Torn. T2 (perfiles)": e["total_t2"],
     })
 st.dataframe(pd.DataFrame(filas_est), use_container_width=True, hide_index=True)
 
@@ -706,7 +717,7 @@ if st.button("📥 Generar PDF", type="primary"):
         pdf_bytes = generar_pdf(
             habs, hab_info, plan, todas_piezas,
             total_area, total_perim, tot_mon,
-            tot_torn, m2_comprados, m2_aprovechados,
+            tot_t1, m2_comprados, m2_aprovechados,
             m2_desperdiciados, pct_desp, conteo, costo_total,
             estructuras, descripcion,
         )
