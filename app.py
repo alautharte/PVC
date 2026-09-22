@@ -134,28 +134,39 @@ def orientacion_optima(r, idx, lens):
 # CÁLCULO DE ESTRUCTURA
 # ═══════════════════════════════════════════════════════════════════
 
-def calcular_estructura(largo, ancho, altura):
-    P = (largo + ancho) * 2
+def calcular_estructura(largo, ancho, altura, orientacion):
+    # Definir qué lado es paralelo a las placas y cuál es perpendicular
+    if orientacion == "largo":
+        dim_paralela = largo   # Sentido en el que corren las placas y las Vigas Maestras
+        dim_transversal = ancho # Sentido en el que corren los Montantes
+    else:
+        dim_paralela = ancho
+        dim_transversal = largo
 
+    P = (largo + ancho) * 2
     SP = math.ceil(P / LARGO_PERFIL)
 
-    lineas_maestras  = max(0, math.ceil(ancho / SEP_MAESTRAS) - 1)
-    metros_maestras  = lineas_maestras * largo
+    # VIGAS MAESTRAS (Corren en el sentido de dim_paralela, se separan a lo largo de dim_transversal)
+    lineas_maestras = max(0, math.ceil(dim_transversal / SEP_MAESTRAS) - 1)
+    metros_maestras = lineas_maestras * dim_paralela
     soleras_maestras = math.ceil(metros_maestras / LARGO_PERFIL) if metros_maestras > 0 else 0
 
-    velas_por_linea = math.ceil(largo / SEP_VELAS) + 1
-    total_velas     = velas_por_linea * lineas_maestras
-    metros_velas    = total_velas * altura
-    soleras_velas   = math.ceil(metros_velas / LARGO_PERFIL) if metros_velas > 0 else 0
+    # VELAS RÍGIDAS (Anclajes sobre las vigas maestras)
+    velas_por_linea = math.ceil(dim_paralela / SEP_VELAS) + 1
+    total_velas = velas_por_linea * lineas_maestras
+    metros_velas = total_velas * altura
+    soleras_velas = math.ceil(metros_velas / LARGO_PERFIL) if metros_velas > 0 else 0
 
     total_soleras = SP + soleras_maestras + soleras_velas
 
-    lineas_montantes = math.ceil(largo / SEP_MONTANTES)
-    metros_montantes = lineas_montantes * ancho
-    total_montantes  = math.ceil(metros_montantes / LARGO_PERFIL)
+    # MONTANTES (Corren en el sentido de dim_transversal, se separan a lo largo de dim_paralela)
+    lineas_montantes = math.ceil(dim_paralela / SEP_MONTANTES) + 1 # +1 para asegurar el cierre perimetral
+    metros_montantes = lineas_montantes * dim_transversal
+    total_montantes = math.ceil(metros_montantes / LARGO_PERFIL)
 
     total_molduras = math.ceil(P / LARGO_MOLDURA)
 
+    # FIJACIONES A PARED Y TECHO
     fijaciones_pared = math.ceil(P / DIST_TARUGOS)
     total_tarugos_n8 = fijaciones_pared + total_velas
 
@@ -505,8 +516,9 @@ m2_desperdiciados = (metros_comp - metros_us) * PW
 pct_desp = ((metros_comp - metros_us) / metros_comp * 100) if metros_comp > 0 else 0
 
 # Estructura
-estructuras = {h["nombre"]: calcular_estructura(h["largo"], h["ancho"], h.get("altura",0.30))
-               for h in habs}
+estructuras = {}
+for h in hab_info:
+    estructuras[h["nombre"]] = calcular_estructura(h["largo"], h["ancho"], h.get("altura",0.30), h["orient"])
 
 tot_sol  = sum(e["total_soleras"]   for e in estructuras.values())
 tot_mon  = sum(e["total_montantes"] for e in estructuras.values())
