@@ -438,7 +438,7 @@ if "habitaciones" not in st.session_state:
 def agregar():
     n = len(st.session_state.habitaciones)+1
     st.session_state.habitaciones.append(
-        {"nombre":f"Habitación {n}","largo":0.0,"ancho":0.0,"altura":0.30,"fijo":False})
+        {"nombre":f"Habitación {n}","largo":0.1,"ancho":0.1,"altura":0.30,"fijo":False})
 
 def eliminar(i):
     st.session_state.habitaciones.pop(i)
