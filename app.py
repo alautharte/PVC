@@ -312,7 +312,7 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
 
     # ── Detalle placas por habitación ────────────────────────────────
     story.append(Paragraph("DETALLE DE PLACAS PVC POR HABITACIÓN", s_sub))
-    ph    = ["Habitación","Área (m²)","Dirección","Pieza (m)","Filas","Perím. (m)"]
+    ph    = ["Habitación","Área (m²)","Dirección","Medida placa (m)","Filas placas","Perím. (m)"]
     prows = [ph]
     for h in hab_info:
         area  = h["largo"]*h["ancho"]
