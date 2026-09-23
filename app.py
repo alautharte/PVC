@@ -425,21 +425,29 @@ def _grupos_l(lt, at, lr, ar, orient):
     Grupos de tiras (dimensión, cantidad) de una L. El recorte (lr × ar) es el
     pedazo que FALTA, en cualquier esquina: la esquina no cambia las cantidades.
 
-    orient "ancho": placas corren en dirección del ANCHO, las filas avanzan por el largo.
-        - tiras que caen sobre el recorte: ancho_total - ancho_recorte
-        - el resto: ancho_total
-    orient "largo": placas corren en dirección del LARGO, las filas avanzan por el ancho.
-        - tiras que caen sobre el recorte: largo_total - largo_recorte
-        - el resto: largo_total
-    La fila que cruza el borde del recorte se cuenta como larga (queda cubierta).
+    Las filas se colocan ARRANCANDO POR EL BRAZO COMPLETO:
+      - filas largas = ceil(brazo completo / 0,20). La fila que cruza el borde
+        del recorte es larga (tiene que cubrir el brazo completo).
+      - filas cortas = lo que falta hasta la pared del recorte, redondeado
+        hacia arriba. La última fila corta es el borde (se recorta a lo ancho).
+    Así se usan la menor cantidad posible de filas largas con el mismo total.
+
+    orient "ancho": placas en dirección del ANCHO, las filas avanzan por el largo.
+        largas = ancho_total,                cortas = ancho_total - ancho_recorte
+    orient "largo": placas en dirección del LARGO, las filas avanzan por el ancho.
+        largas = largo_total,                cortas = largo_total - largo_recorte
+
+    Ej.: 3,00 × 3,25 con recorte 0,80 × 1,56, placas a lo largo:
+        largas = ceil(1,69 / 0,20) = 9 de 3,00 m
+        cortas = ceil((3,25 - 1,80) / 0,20) = ceil(7,25) = 8 de 2,20 m
     """
     if orient == "ancho":
         total  = n_filas(lt)
-        cortas = min(math.floor(round(lr / PW, 6)), total)
-        return [(round(at, 4), total - cortas), (round(at - ar, 4), cortas)]
+        largas = min(n_filas(round(lt - lr, 4)), total)
+        return [(round(at, 4), largas), (round(at - ar, 4), total - largas)]
     total  = n_filas(at)
-    cortas = min(math.floor(round(ar / PW, 6)), total)
-    return [(round(lt, 4), total - cortas), (round(lt - lr, 4), cortas)]
+    largas = min(n_filas(round(at - ar, 4)), total)
+    return [(round(lt, 4), largas), (round(lt - lr, 4), total - largas)]
 
 
 def _expandir_grupos(grupos, idx, lens, usar_h):
