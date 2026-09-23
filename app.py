@@ -169,46 +169,66 @@ def elegir_mejor_plan(piezas, lens):
     return mejor_plan or []
 
 
-def calcular_piezas_l(largo_total, ancho_total, largo_recorte, ancho_recorte, idx, lens):
+def calcular_piezas_l(largo_total, ancho_total, largo_recorte, ancho_recorte, idx, lens,
+                      otras_piezas=None):
     """
     Calcula piezas para ambiente en L.
+    El usuario ingresa el RECORTE. Internamente calculamos el TRAMO que queda.
     
-    El usuario ingresa el RECORTE (el pedazo que falta).
-    Internamente calculamos el TRAMO que queda:
-      largo_tramo = largo_total - largo_recorte
-      ancho_tramo = ancho_total - ancho_recorte
-    
-    Orientación A: placas corren en dirección largo_total (horizontal).
-      - ceil(ancho_total / PW)  filas de largo_total   (cubren toda la L, incluye esquina)
-      - ceil(ancho_tramo / PW)  filas de largo_tramo   (solo el tramo que queda)
-      
-    Orientación B: placas corren en dirección ancho_total (vertical).
-      - ceil(largo_total / PW)  filas de ancho_total   (cubren toda la L)
-      - ceil(largo_tramo / PW)  filas de ancho_tramo   (solo el tramo que queda)
-    
-    Elige la orientación con menor número de placas totales.
+    Evalúa ambas orientaciones en el contexto global (otras_piezas) para
+    elegir la que minimiza el desperdicio total del conjunto.
+    Solo considera orientaciones donde TODAS las piezas entran en los largos disponibles.
     """
     largo_tramo = round(largo_total - largo_recorte, 4)
-    ancho_tramo = round(ancho_total - ancho_recorte, 4)
+    ancho_tramo = round(ancho_total  - ancho_recorte,  4)
+    otras = otras_piezas or []
 
-    # Orientación A: placas → largo
-    filas_A_l = math.ceil(ancho_total  / PW)
-    filas_A_c = math.ceil(ancho_tramo  / PW)
+    # Orientación A: placas corren en dirección largo_total
+    # Orientación A: placas corren en dirección largo_total (horizontal)
+    # Las filas se cuentan horizontalmente.
+    # Tramo largo: ceil(largo_tramo/PW) filas — incluye la fila de esquina
+    # Tramo corto: floor(largo_recorte/PW) filas — sin la fila de esquina
+    # La dimensión de cada pieza es ancho_total o ancho_tramo (vertical)
+    filas_A_l = math.ceil(largo_tramo   / PW)   # filas del tramo largo (incluye esquina)
+    filas_A_c = math.floor(largo_recorte / PW)  # filas solo del tramo corto
     piezas_A  = (
-        [{"dim": largo_total,  "hab_idx": idx}] * filas_A_l +
-        [{"dim": largo_tramo,  "hab_idx": idx}] * filas_A_c
+        [{"dim": ancho_total,  "hab_idx": idx}] * filas_A_l +
+        [{"dim": ancho_tramo,  "hab_idx": idx}] * filas_A_c
     )
 
-    # Orientación B: placas → ancho
-    filas_B_l = math.ceil(largo_total  / PW)
-    filas_B_c = math.ceil(largo_tramo  / PW)
+    # Orientación B: placas corren en dirección ancho_total (vertical)
+    # Las filas se cuentan verticalmente.
+    filas_B_l = math.ceil(ancho_tramo   / PW)   # filas del tramo largo (incluye esquina)
+    filas_B_c = math.floor(ancho_recorte / PW)  # filas solo del tramo corto
     piezas_B  = (
-        [{"dim": ancho_total,  "hab_idx": idx}] * filas_B_l +
-        [{"dim": ancho_tramo,  "hab_idx": idx}] * filas_B_c
+        [{"dim": largo_total,  "hab_idx": idx}] * filas_B_l +
+        [{"dim": largo_tramo,  "hab_idx": idx}] * filas_B_c
     )
 
-    plan_A = elegir_mejor_plan(piezas_A, lens)
-    plan_B = elegir_mejor_plan(piezas_B, lens)
+    # Verificar que todas las piezas entran en algún largo disponible
+    max_L = max(lens) if lens else 0
+    viable_A = all(p["dim"] <= max_L + 0.0001 for p in piezas_A)
+    viable_B = all(p["dim"] <= max_L + 0.0001 for p in piezas_B)
+
+    if not viable_A and not viable_B:
+        # Ninguna orientación funciona sin H — elegir la de menor piezas
+        plan_A = elegir_mejor_plan(piezas_A, lens)
+        plan_B = elegir_mejor_plan(piezas_B, lens)
+        n_A = len(plan_A) if plan_A else float("inf")
+        n_B = len(plan_B) if plan_B else float("inf")
+        if n_A <= n_B:
+            return "largo", piezas_A, filas_A_l, filas_A_c, largo_total, largo_tramo
+        else:
+            return "ancho", piezas_B, filas_B_l, filas_B_c, ancho_total, ancho_tramo
+
+    if not viable_A:
+        return "ancho", piezas_B, filas_B_l, filas_B_c, ancho_total, ancho_tramo
+    if not viable_B:
+        return "largo", piezas_A, filas_A_l, filas_A_c, largo_total, largo_tramo
+
+    # Ambas viables: evaluar en contexto global
+    plan_A = elegir_mejor_plan(otras + piezas_A, lens)
+    plan_B = elegir_mejor_plan(otras + piezas_B, lens)
     n_A = len(plan_A) if plan_A else float("inf")
     n_B = len(plan_B) if plan_B else float("inf")
 
@@ -801,8 +821,10 @@ for i, h in enumerate(habs):
         ar  = h["ancho_reducido"]
         lr_rec = h["largo_reducido"]  # recorte
         ar_rec = h["ancho_reducido"]  # recorte
+        # Pasar piezas ya calculadas de otras habitaciones como contexto global
+        otras_piezas_ctx = [p for h2 in hab_info for p in h2["piezas"]]
         orient, piezas, filas_l, filas_c, dim_larga, dim_corta = calcular_piezas_l(
-            lt, at, lr_rec, ar_rec, i, lens)
+            lt, at, lr_rec, ar_rec, i, lens, otras_piezas=otras_piezas_ctx)
         filas      = filas_l + filas_c
         dim_pieza  = dim_larga   # dim principal para referencia
         segmentos  = [dim_larga]
