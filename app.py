@@ -289,6 +289,14 @@ def costo_plan(plan, precios=None):
     return sum(b["largo_placa"] for b in plan)
 
 
+def clave_plan(plan, precios=None):
+    """Criterio de comparación entre planes: primero costo ($ o metros),
+    a igual costo, menos placas."""
+    if not plan:
+        return (float("inf"), float("inf"))
+    return (round(costo_plan(plan, precios), 6), len(plan))
+
+
 def resolver_optimo(piezas, lens, precios=None, kerf=0.0, limite_seg=15):
     """
     Cutting stock óptimo por patrones. Minimiza $ si hay precios para todos
@@ -381,7 +389,7 @@ def mejorar_orientaciones(hab_info, lens, pw, precios=None, kerf=0.0):
     plan = resolver_optimo(todas(), lens, precios, kerf)
     if plan is None:
         return None
-    mejor = costo_plan(plan, precios)
+    mejor = clave_plan(plan, precios)
 
     for _ in range(2):
         hubo_mejora = False
@@ -399,8 +407,8 @@ def mejorar_orientaciones(hab_info, lens, pw, precios=None, kerf=0.0):
             h.update(orient=n_or, dim_pieza=n_dim, filas=n_fil, segmentos=[n_dim],
                      transv=n_tr, piezas=[{"dim": n_dim, "hab_idx": h["idx"]}] * n_fil)
             cand = resolver_optimo(todas(), lens, precios, kerf)
-            c = costo_plan(cand, precios) if cand else float("inf")
-            if c < mejor - 1e-9:
+            c = clave_plan(cand, precios)
+            if c < mejor:
                 plan, mejor, hubo_mejora = cand, c, True
             else:
                 h.update(viejo)
@@ -493,7 +501,7 @@ def calcular_piezas_l(lt, at, lr, ar, idx, lens, otras_piezas=None,
     def evaluar(o):
         plan = (resolver_optimo(otras + o["piezas"], lens, precios)
                 or resolver_mixto(otras + o["piezas"], lens))
-        return (costo_plan(plan, precios), o["varillas_h"])
+        return clave_plan(plan, precios) + (o["varillas_h"],)
 
     return min(candidatas, key=evaluar)
 
@@ -619,16 +627,16 @@ def orientacion_optima(r, idx, lens_efectivos):
     if not largo_necesita_h and not ancho_necesita_h:
         p_largo = piezas_simples(r["largo"], filas_largo, idx)
         p_ancho = piezas_simples(r["ancho"], filas_ancho, idx)
-        c_l = costo_plan(resolver_optimo(p_largo, lens_efectivos) or elegir_mejor_plan(p_largo, lens_efectivos))
-        c_a = costo_plan(resolver_optimo(p_ancho, lens_efectivos) or elegir_mejor_plan(p_ancho, lens_efectivos))
+        c_l = clave_plan(resolver_optimo(p_largo, lens_efectivos) or elegir_mejor_plan(p_largo, lens_efectivos))
+        c_a = clave_plan(resolver_optimo(p_ancho, lens_efectivos) or elegir_mejor_plan(p_ancho, lens_efectivos))
         if c_l <= c_a:
             return "largo", r["largo"], filas_largo, p_largo, [r["largo"]], 0
         return "ancho", r["ancho"], filas_ancho, p_ancho, [r["ancho"]], 0
 
     p_largo = piezas_con_h(r["largo"], filas_largo, idx, lens_efectivos)
     p_ancho = piezas_con_h(r["ancho"], filas_ancho, idx, lens_efectivos)
-    c_l = costo_plan(resolver_optimo(p_largo, lens_efectivos) or elegir_mejor_plan(p_largo, lens_efectivos))
-    c_a = costo_plan(resolver_optimo(p_ancho, lens_efectivos) or elegir_mejor_plan(p_ancho, lens_efectivos))
+    c_l = clave_plan(resolver_optimo(p_largo, lens_efectivos) or elegir_mejor_plan(p_largo, lens_efectivos))
+    c_a = clave_plan(resolver_optimo(p_ancho, lens_efectivos) or elegir_mejor_plan(p_ancho, lens_efectivos))
     if c_l <= c_a:
         segs, n_h = dividir_con_h(r["largo"], lens_efectivos)
         return "largo", r["largo"], filas_largo, p_largo, segs, n_h
@@ -1221,7 +1229,7 @@ todas_piezas = [p for h in hab_info for p in h["piezas"]]
 candidatos_plan = [plan_opt, resolver_mixto(todas_piezas, lens)] + \
                   [resolver_con_largo(todas_piezas, L) for L in lens]
 candidatos_plan = [c for c in candidatos_plan if c]
-plan = min(candidatos_plan, key=lambda c: costo_plan(c, precios)) if candidatos_plan else []
+plan = min(candidatos_plan, key=lambda c: clave_plan(c, precios)) if candidatos_plan else []
 
 # Control de consistencia: el plan tiene que cubrir TODAS las piezas
 _demanda = Counter(_mm(p["dim"]) for p in todas_piezas)
@@ -1238,12 +1246,16 @@ for b in plan:
 total_placas = len(plan)
 total_area   = sum(hab_area(h) for h in habs)
 
+# Desperdicio = sobrante a lo LARGO de las placas (lo que queda sin cortar).
+# La última fila de cada ambiente, que se usa solo en parte del ancho
+# (ej. 10 cm de los 20 cm), cuenta como placa aprovechada, NO como desperdicio.
 metros_comp       = sum(b["largo_placa"] for b in plan)
 metros_us         = sum(p["dim"] for p in todas_piezas)
 m2_comprados      = metros_comp * PW
 m2_aprovechados   = metros_us   * PW
-m2_desperdiciados = (metros_comp - metros_us) * PW
-pct_desp = ((metros_comp-metros_us)/metros_comp*100) if metros_comp>0 else 0
+m2_desperdiciados = max(0.0, (metros_comp - metros_us) * PW)
+m2_borde          = max(0.0, m2_aprovechados - total_area)   # informativo
+pct_desp = (m2_desperdiciados / m2_comprados * 100) if m2_comprados > 0 else 0
 
 tot_h_perfiles = sum(h["n_h"] for h in hab_info)          # líneas de unión
 tot_h_varillas = sum(h["varillas_h"] for h in hab_info)    # varillas de 4 m
@@ -1285,7 +1297,9 @@ c6.metric("Tarugos N°8",       f"{tot_tar} un.")
 
 st.write("")
 ca,cb,cc,cd,ce,cf = st.columns(6)
-ca.metric("✅ m² aprovechados",     f"{m2_aprovechados:.2f} m²")
+ca.metric("✅ m² aprovechados",     f"{m2_aprovechados:.2f} m²",
+          help=f"Incluye {m2_borde:.2f} m² de borde (última fila usada solo en "
+               f"parte del ancho), que no se cuenta como desperdicio.")
 cb.metric("❌ m² desperdicio",      f"{m2_desperdiciados:.2f} m²",
           delta=f"-{pct_desp:.1f}%", delta_color="inverse")
 cc.metric("📦 m² comprados",        f"{m2_comprados:.2f} m²")
