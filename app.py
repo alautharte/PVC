@@ -241,73 +241,56 @@ def calcular_piezas_l(largo_total, ancho_total, largo_recorte, ancho_recorte, id
 def diagrama_l_svg(lt, at, lr, ar, color, esquina="inf_izq"):
     """
     SVG que muestra la forma L con medidas.
-    esquina: dónde está el recorte — "inf_izq", "inf_der", "sup_izq", "sup_der"
-    
     Siempre muestra:
-      - largo_total (lt) = dimensión horizontal total
-      - ancho_total (at) = dimensión vertical total
-      - largo_recorte (lr) = dimensión horizontal del recorte
-      - ancho_recorte (ar) = dimensión vertical del recorte
+      - largo_total (lt) arriba, de punta a punta
+      - ancho_total (at) al costado, de punta a punta
+      - largo_recorte (lr) y ancho_recorte (ar) sobre el recorte
     """
-    scale  = 110 / max(lt, at)
-    pad    = 32
-    W_svg  = int(lt * scale) + pad * 2 + 20
-    H_svg  = int(at * scale) + pad * 2
-    x0, y0 = pad, pad   # esquina superior izquierda del rectángulo total
+    scale = 110 / max(lt, at)
+    pad   = 36
+    W_svg = int(lt * scale) + pad * 2 + 20
+    H_svg = int(at * scale) + pad * 2
+    x0, y0 = pad, pad
     wt  = int(lt * scale)
     ht  = int(at * scale)
     wlr = int(lr * scale)
     har = int(ar * scale)
     c   = color
 
-    # Calcular los 6 puntos del polígono L según la esquina del recorte
     if esquina == "inf_izq":
-        # Recorte abajo a la izquierda
         pts = (f"{x0},{y0} {x0+wt},{y0} {x0+wt},{y0+ht} "
                f"{x0+wlr},{y0+ht} {x0+wlr},{y0+ht-har} {x0},{y0+ht-har}")
-        # Cotas
         dim_lines = (
-            _cota_h(x0, y0-6,     x0+wt, y0-6,     lt, c, "above") +
-            _cota_v(x0+wt+4, y0,  x0+wt+4, y0+ht,  at, c, "right") +
-            _cota_h(x0, y0+ht+6,  x0+wlr, y0+ht+6, lr, c, "below") +
-            _cota_v(x0+wlr+4, y0+ht-har, x0+wlr+4, y0+ht, ar, c, "right")
+            _cota_h(x0, y0-8, x0+wt, y0-8, lt, c, "above") +          # largo total arriba
+            _cota_v(x0+wt+4, y0, x0+wt+4, y0+ht, at, c, "right") +    # ancho total derecha
+            _cota_h(x0, y0+ht+6, x0+wlr, y0+ht+6, lr, c, "below") +  # largo recorte abajo
+            _cota_v(x0+wlr+4, y0+ht-har, x0+wlr+4, y0+ht, ar, c, "right")  # ancho recorte
         )
     elif esquina == "inf_der":
-        # Recorte abajo a la derecha
         pts = (f"{x0},{y0} {x0+wt},{y0} {x0+wt},{y0+ht-har} "
                f"{x0+wt-wlr},{y0+ht-har} {x0+wt-wlr},{y0+ht} {x0},{y0+ht}")
         dim_lines = (
-            _cota_h(x0, y0-6,          x0+wt, y0-6,          lt, c, "above") +
-            _cota_v(x0-4, y0,           x0-4, y0+ht,           at, c, "left")  +
-            _cota_h(x0+wt-wlr, y0+ht+6, x0+wt, y0+ht+6,       lr, c, "below") +
+            _cota_h(x0, y0-8, x0+wt, y0-8, lt, c, "above") +
+            _cota_v(x0-4, y0, x0-4, y0+ht, at, c, "left") +
+            _cota_h(x0+wt-wlr, y0+ht+6, x0+wt, y0+ht+6, lr, c, "below") +
             _cota_v(x0+wt-wlr-4, y0+ht-har, x0+wt-wlr-4, y0+ht, ar, c, "left")
         )
     elif esquina == "sup_izq":
-        # Recorte arriba a la izquierda
         pts = (f"{x0},{y0} {x0+wlr},{y0} {x0+wlr},{y0+har} "
                f"{x0+wt},{y0+har} {x0+wt},{y0+ht} {x0},{y0+ht}")
         dim_lines = (
-            _cota_h(x0+wlr, y0-6,  x0+wt, y0-6,    lt, c, "above") +
-            _cota_v(x0+wt+4, y0+har, x0+wt+4, y0+ht, at, c, "right") +
-            _cota_h(x0, y0-6,       x0+wlr, y0-6,   lr, c, "above") +
-            _cota_v(x0+wlr+4, y0,   x0+wlr+4, y0+har, ar, c, "right") +
-            _cota_v(x0-4, y0,        x0-4, y0+ht,    at, c, "left")
-        )
-        # Simplificar: solo cota de lt arriba, at derecha, lr recorte, ar recorte
-        dim_lines = (
-            _cota_h(x0, y0-6,    x0+wt, y0-6,   lt, c, "above") +
-            _cota_v(x0+wt+4, y0+har, x0+wt+4, y0+ht, at, c, "right") +
-            _cota_h(x0, y0+har+4, x0+wlr, y0+har+4, lr, c, "below") +
+            _cota_h(x0, y0-8, x0+wt, y0-8, lt, c, "above") +
+            _cota_v(x0+wt+4, y0, x0+wt+4, y0+ht, at, c, "right") +
+            _cota_h(x0, y0-8, x0+wlr, y0-8, lr, c, "above") +
             _cota_v(x0+wlr+4, y0, x0+wlr+4, y0+har, ar, c, "right")
         )
     else:  # sup_der
-        # Recorte arriba a la derecha
         pts = (f"{x0},{y0+har} {x0+wt-wlr},{y0+har} {x0+wt-wlr},{y0} "
                f"{x0+wt},{y0} {x0+wt},{y0+ht} {x0},{y0+ht}")
         dim_lines = (
-            _cota_h(x0, y0-6,    x0+wt, y0-6,   lt, c, "above") +
+            _cota_h(x0, y0-8, x0+wt, y0-8, lt, c, "above") +
             _cota_v(x0+wt+4, y0, x0+wt+4, y0+ht, at, c, "right") +
-            _cota_h(x0+wt-wlr, y0+har+4, x0+wt, y0+har+4, lr, c, "below") +
+            _cota_h(x0+wt-wlr, y0-8, x0+wt, y0-8, lr, c, "above") +
             _cota_v(x0+wt-wlr-4, y0, x0+wt-wlr-4, y0+har, ar, c, "left")
         )
 
