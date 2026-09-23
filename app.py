@@ -476,7 +476,7 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     for h in habs:
         e  = estructuras[h["nombre"]]
         hi = next(x for x in hab_info if x["nombre"]==h["nombre"])
-        erows.append([h["nombre"], f"{h['largo']}×{h['ancho']}m",
+        erows.append([h["nombre"], f"{hab_largo(h)}×{hab_ancho(h)}m",
                       f"{h.get('altura',0.30):.2f}m",
                       str(e["total_soleras"]), str(e["total_montantes"]),
                       str(e["total_molduras"]), str(e["total_tarugos_n8"]),
@@ -943,7 +943,7 @@ for h in hab_info:
     h_txt = f"{h['n_h']} H ({varillas} var.)" if h["n_h"]>0 else "—"
     filas_est.append({
         "Habitación":          h["nombre"],
-        "Dimensiones":         f"{h['largo']}×{h['ancho']}m",
+        "Dimensiones":         f"{hab_largo(h)}×{hab_ancho(h)}m",
         "Alt. susp.":          f"{h.get('altura',0.30):.2f}m",
         "Soleras":             e["total_soleras"],
         "Montantes":           e["total_montantes"],
