@@ -238,48 +238,106 @@ def calcular_piezas_l(largo_total, ancho_total, largo_recorte, ancho_recorte, id
         return "ancho", piezas_B, filas_B_l, filas_B_c, ancho_total, ancho_tramo
 
 
-def diagrama_l_svg(lt, at, lr, ar, color):
-    """SVG que muestra la forma L con medidas."""
-    scale  = 120 / max(lt, at + ar)
-    W_svg  = int(lt * scale) + 70
-    H_svg  = int((at + ar) * scale) + 50
-    x0, y0 = 30, 12
-    wt = int(lt * scale)
-    hat = int(at * scale)
+def diagrama_l_svg(lt, at, lr, ar, color, esquina="inf_izq"):
+    """
+    SVG que muestra la forma L con medidas.
+    esquina: dónde está el recorte — "inf_izq", "inf_der", "sup_izq", "sup_der"
+    
+    Siempre muestra:
+      - largo_total (lt) = dimensión horizontal total
+      - ancho_total (at) = dimensión vertical total
+      - largo_recorte (lr) = dimensión horizontal del recorte
+      - ancho_recorte (ar) = dimensión vertical del recorte
+    """
+    scale  = 110 / max(lt, at)
+    pad    = 32
+    W_svg  = int(lt * scale) + pad * 2 + 20
+    H_svg  = int(at * scale) + pad * 2
+    x0, y0 = pad, pad   # esquina superior izquierda del rectángulo total
+    wt  = int(lt * scale)
+    ht  = int(at * scale)
     wlr = int(lr * scale)
     har = int(ar * scale)
-    pts = (
-        f"{x0},{y0} {x0+wt},{y0} {x0+wt},{y0+hat} "
-        f"{x0+wlr},{y0+hat} {x0+wlr},{y0+hat+har} {x0},{y0+hat+har}"
-    )
-    c = color
-    lines = (
-        # largo total (arriba)
-        '<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="1"/>'.format(
-            x0, y0-6, x0+wt, y0-6, c) +
-        '<text x="{}" y="{}" fill="{}" font-size="10" text-anchor="middle">{}m</text>'.format(
-            x0+wt//2, y0-9, c, lt) +
-        # ancho total (derecha)
-        '<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="1"/>'.format(
-            x0+wt+4, y0, x0+wt+4, y0+hat, c) +
-        '<text x="{}" y="{}" fill="{}" font-size="10" text-anchor="middle">{}m</text>'.format(
-            x0+wt+18, y0+hat//2+4, c, at) +
-        # largo reducido (abajo)
-        '<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="1"/>'.format(
-            x0, y0+hat+har+7, x0+wlr, y0+hat+har+7, c) +
-        '<text x="{}" y="{}" fill="{}" font-size="10" text-anchor="middle">{}m</text>'.format(
-            x0+wlr//2, y0+hat+har+19, c, lr) +
-        # ancho reducido (derecha del tramo corto)
-        '<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="1"/>'.format(
-            x0+wlr+4, y0+hat, x0+wlr+4, y0+hat+har, c) +
-        '<text x="{}" y="{}" fill="{}" font-size="10" text-anchor="middle">{}m</text>'.format(
-            x0+wlr+18, y0+hat+har//2+4, c, ar)
-    )
+    c   = color
+
+    # Calcular los 6 puntos del polígono L según la esquina del recorte
+    if esquina == "inf_izq":
+        # Recorte abajo a la izquierda
+        pts = (f"{x0},{y0} {x0+wt},{y0} {x0+wt},{y0+ht} "
+               f"{x0+wlr},{y0+ht} {x0+wlr},{y0+ht-har} {x0},{y0+ht-har}")
+        # Cotas
+        dim_lines = (
+            _cota_h(x0, y0-6,     x0+wt, y0-6,     lt, c, "above") +
+            _cota_v(x0+wt+4, y0,  x0+wt+4, y0+ht,  at, c, "right") +
+            _cota_h(x0, y0+ht+6,  x0+wlr, y0+ht+6, lr, c, "below") +
+            _cota_v(x0+wlr+4, y0+ht-har, x0+wlr+4, y0+ht, ar, c, "right")
+        )
+    elif esquina == "inf_der":
+        # Recorte abajo a la derecha
+        pts = (f"{x0},{y0} {x0+wt},{y0} {x0+wt},{y0+ht-har} "
+               f"{x0+wt-wlr},{y0+ht-har} {x0+wt-wlr},{y0+ht} {x0},{y0+ht}")
+        dim_lines = (
+            _cota_h(x0, y0-6,          x0+wt, y0-6,          lt, c, "above") +
+            _cota_v(x0-4, y0,           x0-4, y0+ht,           at, c, "left")  +
+            _cota_h(x0+wt-wlr, y0+ht+6, x0+wt, y0+ht+6,       lr, c, "below") +
+            _cota_v(x0+wt-wlr-4, y0+ht-har, x0+wt-wlr-4, y0+ht, ar, c, "left")
+        )
+    elif esquina == "sup_izq":
+        # Recorte arriba a la izquierda
+        pts = (f"{x0},{y0} {x0+wlr},{y0} {x0+wlr},{y0+har} "
+               f"{x0+wt},{y0+har} {x0+wt},{y0+ht} {x0},{y0+ht}")
+        dim_lines = (
+            _cota_h(x0+wlr, y0-6,  x0+wt, y0-6,    lt, c, "above") +
+            _cota_v(x0+wt+4, y0+har, x0+wt+4, y0+ht, at, c, "right") +
+            _cota_h(x0, y0-6,       x0+wlr, y0-6,   lr, c, "above") +
+            _cota_v(x0+wlr+4, y0,   x0+wlr+4, y0+har, ar, c, "right") +
+            _cota_v(x0-4, y0,        x0-4, y0+ht,    at, c, "left")
+        )
+        # Simplificar: solo cota de lt arriba, at derecha, lr recorte, ar recorte
+        dim_lines = (
+            _cota_h(x0, y0-6,    x0+wt, y0-6,   lt, c, "above") +
+            _cota_v(x0+wt+4, y0+har, x0+wt+4, y0+ht, at, c, "right") +
+            _cota_h(x0, y0+har+4, x0+wlr, y0+har+4, lr, c, "below") +
+            _cota_v(x0+wlr+4, y0, x0+wlr+4, y0+har, ar, c, "right")
+        )
+    else:  # sup_der
+        # Recorte arriba a la derecha
+        pts = (f"{x0},{y0+har} {x0+wt-wlr},{y0+har} {x0+wt-wlr},{y0} "
+               f"{x0+wt},{y0} {x0+wt},{y0+ht} {x0},{y0+ht}")
+        dim_lines = (
+            _cota_h(x0, y0-6,    x0+wt, y0-6,   lt, c, "above") +
+            _cota_v(x0+wt+4, y0, x0+wt+4, y0+ht, at, c, "right") +
+            _cota_h(x0+wt-wlr, y0+har+4, x0+wt, y0+har+4, lr, c, "below") +
+            _cota_v(x0+wt-wlr-4, y0, x0+wt-wlr-4, y0+har, ar, c, "left")
+        )
+
     return (
         '<svg width="{}" height="{}" xmlns="http://www.w3.org/2000/svg">'
         '<polygon points="{}" fill="{}22" stroke="{}" stroke-width="2"/>'
         '{}</svg>'
-    ).format(W_svg, H_svg, pts, c, c, lines)
+    ).format(W_svg, H_svg, pts, c, c, dim_lines)
+
+
+def _cota_h(x1, y1, x2, y2, val, color, pos):
+    """Línea horizontal con etiqueta."""
+    ym = (y1+y2)//2 if y1==y2 else y1
+    ty = ym - 3 if pos == "above" else ym + 11
+    return (
+        '<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="1"/>'.format(x1,y1,x2,y2,color) +
+        '<text x="{}" y="{}" fill="{}" font-size="10" text-anchor="middle">{}m</text>'.format(
+            (x1+x2)//2, ty, color, val)
+    )
+
+def _cota_v(x1, y1, x2, y2, val, color, pos):
+    """Línea vertical con etiqueta."""
+    tx = x1 + 14 if pos == "right" else x1 - 4
+    anchor = "start" if pos == "right" else "end"
+    return (
+        '<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="1"/>'.format(x1,y1,x2,y2,color) +
+        '<text x="{}" y="{}" fill="{}" font-size="10" text-anchor="{}" '
+        'transform="rotate(-90,{},{})">{}m</text>'.format(
+            tx, (y1+y2)//2, color, anchor, tx, (y1+y2)//2, val)
+    )
 
 
 def orientacion_optima(r, idx, lens_efectivos):
@@ -695,7 +753,7 @@ def agregar_l():
         {"hid": hid, "nombre": f"Ambiente L {n}", "tipo": "l",
          "largo_total": 4.0, "ancho_total": 1.5,
          "largo_reducido": 1.5, "ancho_reducido": 0.5,
-         "altura": 0.30, "forzar_h": False})
+         "altura": 0.30, "forzar_h": False, "esquina": "inf_izq"})
 
 def eliminar(hid):
     st.session_state.habitaciones = [
@@ -754,14 +812,31 @@ for i, hab in enumerate(st.session_state.habitaciones):
                                  disabled=len(st.session_state.habitaciones)<=1):
                         eliminar(hid)
                         st.rerun()
-                # Diagrama SVG + info de orientación
-                try:
-                    svg_l = diagrama_l_svg(
-                        hab["largo_total"], hab["ancho_total"],
-                        hab["largo_reducido"], hab["ancho_reducido"], color)
-                    st.markdown(svg_l, unsafe_allow_html=True)
-                except Exception:
-                    pass
+                # Selector de esquina + diagrama SVG
+                col_esq, col_svg = st.columns([1, 2])
+                with col_esq:
+                    hab["esquina"] = st.radio(
+                        "Esquina del recorte",
+                        options=["inf_izq", "inf_der", "sup_izq", "sup_der"],
+                        format_func=lambda x: {
+                            "inf_izq": "↙ Abajo izquierda",
+                            "inf_der": "↘ Abajo derecha",
+                            "sup_izq": "↖ Arriba izquierda",
+                            "sup_der": "↗ Arriba derecha",
+                        }[x],
+                        index=["inf_izq","inf_der","sup_izq","sup_der"].index(
+                            hab.get("esquina","inf_izq")),
+                        key=f"esq_{hid}",
+                    )
+                with col_svg:
+                    try:
+                        svg_l = diagrama_l_svg(
+                            hab["largo_total"], hab["ancho_total"],
+                            hab["largo_reducido"], hab["ancho_reducido"],
+                            color, hab.get("esquina","inf_izq"))
+                        st.markdown(svg_l, unsafe_allow_html=True)
+                    except Exception:
+                        pass
             else:
                 # ── Habitación rectangular normal ─────────────────────────
                 c1,c2,c3,c4,c5,c6,c7 = st.columns([2.2,1.2,1.2,1.2,1.6,1.4,0.5])
