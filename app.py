@@ -600,32 +600,54 @@ st.subheader("📐 Habitaciones")
 
 if "habitaciones" not in st.session_state:
     st.session_state.habitaciones = [
-        {"nombre":"Habitación 1","largo":3.5,"ancho":4.0,"altura":0.30,"fijo":False,"forzar_h":False},
-        {"nombre":"Habitación 2","largo":2.5,"ancho":3.0,"altura":0.30,"fijo":False,"forzar_h":False},
+        {"hid":1,"nombre":"Habitación 1","largo":3.5,"ancho":4.0,"altura":0.30,"fijo":False,"forzar_h":False},
+        {"hid":2,"nombre":"Habitación 2","largo":2.5,"ancho":3.0,"altura":0.30,"fijo":False,"forzar_h":False},
     ]
+    st.session_state.hid_counter = 3
+
+def _next_hid():
+    if "hid_counter" not in st.session_state:
+        # asignar hids a habitaciones existentes que no lo tengan
+        for j, h in enumerate(st.session_state.habitaciones):
+            if "hid" not in h:
+                h["hid"] = j + 1
+        st.session_state.hid_counter = len(st.session_state.habitaciones) + 1
+    hid = st.session_state.hid_counter
+    st.session_state.hid_counter += 1
+    return hid
 
 def agregar():
-    n = len(st.session_state.habitaciones)+1
+    n   = len(st.session_state.habitaciones)+1
+    hid = _next_hid()
     st.session_state.habitaciones.append(
-        {"nombre": f"Habitación {n}", "tipo": "rect",
+        {"hid": hid, "nombre": f"Habitación {n}", "tipo": "rect",
          "largo": 0.1, "ancho": 0.1, "altura": 0.30,
          "fijo": False, "forzar_h": False})
 
 def agregar_l():
-    n = len(st.session_state.habitaciones)+1
+    n   = len(st.session_state.habitaciones)+1
+    hid = _next_hid()
     st.session_state.habitaciones.append(
-        {"nombre": f"Ambiente L {n}", "tipo": "l",
+        {"hid": hid, "nombre": f"Ambiente L {n}", "tipo": "l",
          "largo_total": 4.0, "ancho_total": 1.5,
          "largo_reducido": 2.0, "ancho_reducido": 0.8,
          "altura": 0.30, "forzar_h": False})
 
-def eliminar(i):
-    st.session_state.habitaciones.pop(i)
+def eliminar(hid):
+    st.session_state.habitaciones = [
+        h for h in st.session_state.habitaciones if h.get("hid") != hid
+    ]
+
+# Asegurar que todas las habitaciones tengan hid (migración)
+for _j, _h in enumerate(st.session_state.habitaciones):
+    if "hid" not in _h:
+        _h["hid"] = _j + 1
 
 for i, hab in enumerate(st.session_state.habitaciones):
     color    = HAB_COLORS[i%len(HAB_COLORS)]
     es_l     = hab.get("tipo") == "l"
     h_altura = "140px" if es_l else "100px"
+    hid      = hab["hid"]
     col_color, col_form = st.columns([0.015, 0.985])
     with col_color:
         st.markdown(
@@ -639,27 +661,27 @@ for i, hab in enumerate(st.session_state.habitaciones):
                 r1c1, r1c2, r1c3, r1c4, r1c5, r1c6, r1c7 = st.columns([2.2,1.1,1.1,1.1,1.1,1.2,0.5])
                 with r1c1:
                     hab["nombre"] = st.text_input("Nombre", value=hab["nombre"],
-                                                   key=f"nom_{i}", label_visibility="collapsed")
+                                                   key=f"nom_{hid}", label_visibility="collapsed")
                 with r1c2:
                     hab["largo_total"]    = st.number_input("Largo total",    value=hab["largo_total"],
-                                                             step=0.1, min_value=0.1, key=f"lt_{i}")
+                                                             step=0.1, min_value=0.1, key=f"lt_{hid}")
                 with r1c3:
                     hab["ancho_total"]    = st.number_input("Ancho total",    value=hab["ancho_total"],
-                                                             step=0.1, min_value=0.1, key=f"at_{i}")
+                                                             step=0.1, min_value=0.1, key=f"at_{hid}")
                 with r1c4:
                     hab["largo_reducido"] = st.number_input("Largo reducido", value=hab["largo_reducido"],
-                                                             step=0.1, min_value=0.1, key=f"lr_{i}")
+                                                             step=0.1, min_value=0.1, key=f"lr_{hid}")
                 with r1c5:
                     hab["ancho_reducido"] = st.number_input("Ancho reducido", value=hab["ancho_reducido"],
-                                                             step=0.1, min_value=0.1, key=f"ar_{i}")
+                                                             step=0.1, min_value=0.1, key=f"ar_{hid}")
                 with r1c6:
                     hab["altura"]  = st.number_input("Alt. susp.", value=hab.get("altura",0.30),
-                                                      step=0.05, min_value=0.05, key=f"alt_{i}")
+                                                      step=0.05, min_value=0.05, key=f"alt_{hid}")
                 with r1c7:
                     st.write("")
-                    if st.button("🗑️", key=f"del_{i}",
+                    if st.button("🗑️", key=f"del_{hid}",
                                  disabled=len(st.session_state.habitaciones)<=1):
-                        eliminar(i)
+                        eliminar(hid)
                         st.rerun()
                 # Diagrama SVG + info de orientación
                 try:
@@ -674,27 +696,27 @@ for i, hab in enumerate(st.session_state.habitaciones):
                 c1,c2,c3,c4,c5,c6,c7 = st.columns([2.2,1.2,1.2,1.2,1.6,1.4,0.5])
                 with c1:
                     hab["nombre"] = st.text_input("Nombre", value=hab["nombre"],
-                                                   key=f"nom_{i}", label_visibility="collapsed")
+                                                   key=f"nom_{hid}", label_visibility="collapsed")
                 with c2:
                     hab["largo"]  = st.number_input("Largo (m)", value=hab["largo"],
-                                                     step=0.1, min_value=0.1, key=f"lar_{i}")
+                                                     step=0.1, min_value=0.1, key=f"lar_{hid}")
                 with c3:
                     hab["ancho"]  = st.number_input("Ancho (m)", value=hab["ancho"],
-                                                     step=0.1, min_value=0.1, key=f"anc_{i}")
+                                                     step=0.1, min_value=0.1, key=f"anc_{hid}")
                 with c4:
                     hab["altura"] = st.number_input("Alt. susp.", value=hab.get("altura",0.30),
-                                                     step=0.05, min_value=0.05, key=f"alt_{i}")
+                                                     step=0.05, min_value=0.05, key=f"alt_{hid}")
                 with c5:
-                    hab["fijo"]     = st.checkbox("Sentido fijo (→)", value=hab["fijo"], key=f"fij_{i}")
+                    hab["fijo"]     = st.checkbox("Sentido fijo (→)", value=hab["fijo"], key=f"fij_{hid}")
                 with c6:
                     hab["forzar_h"] = st.checkbox("🔗 Usar H", value=hab.get("forzar_h",False),
-                                                   key=f"fh_{i}",
+                                                   key=f"fh_{hid}",
                                                    help="Activa perfil H. Si la placa no alcanza, es obligatorio. Si alcanza, el motor busca el corte óptimo que ahorre más placas.")
                 with c7:
                     st.write("")
-                    if st.button("🗑️", key=f"del_{i}",
+                    if st.button("🗑️", key=f"del_{hid}",
                                  disabled=len(st.session_state.habitaciones)<=1):
-                        eliminar(i)
+                        eliminar(hid)
                         st.rerun()
 
 col_btn1, col_btn2 = st.columns([1, 1])
