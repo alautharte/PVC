@@ -123,8 +123,59 @@ def necesita_h(dim, lens):
 # MOTOR DE CORTE GLOBAL
 # ═══════════════════════════════════════════════════════════════════════════
 
+def mejor_largo_para_pieza(d, lens):
+    """Largo de placa con menor desperdicio para una pieza de dimensión d."""
+    best_L, best_desp = None, float("inf")
+    for L in lens:
+        if L < d - 0.0001:
+            continue
+        n = math.floor(L / d) if d > 0 else 0
+        if n == 0:
+            continue
+        desp = (L - n * d) / L
+        if desp < best_desp:
+            best_desp = desp
+            best_L    = L
+    return best_L
+
+
+def resolver_mixto(piezas, lens):
+    """
+    Bin-packing 1D MIXTO: para cada pieza elige el largo de placa con
+    menor desperdicio individual, reutilizando sobrantes entre piezas.
+    """
+    if not piezas or not lens:
+        return []
+    sorted_p  = sorted(piezas, key=lambda x: -x["dim"])
+    sobrantes = []
+    plan      = []
+    for p in sorted_p:
+        # Intentar usar sobrante existente (el más ajustado)
+        sobrantes.sort(key=lambda s: s["libre"])
+        usado = False
+        for s in sobrantes:
+            if s["libre"] >= p["dim"] - 0.0001:
+                bin_ = plan[s["plan_idx"]]
+                bin_["cortes"].append({"dim": p["dim"], "hab_idx": p["hab_idx"]})
+                s["libre"]    = max(0.0, s["libre"] - p["dim"])
+                bin_["libre"] = s["libre"]
+                usado = True
+                break
+        if not usado:
+            L = mejor_largo_para_pieza(p["dim"], lens)
+            if L is None:
+                continue
+            libre = max(0.0, L - p["dim"])
+            idx   = len(plan)
+            plan.append({"largo_placa": L,
+                         "cortes": [{"dim": p["dim"], "hab_idx": p["hab_idx"]}],
+                         "libre": libre})
+            sobrantes.append({"plan_idx": idx, "libre": libre})
+    return plan
+
+
 def resolver_con_largo(piezas, L):
-    """Bin-packing 1D con largo L fijo. Piezas: [{"dim","hab_idx"}]"""
+    """Bin-packing 1D con largo L fijo. Retorna None si alguna pieza no cabe."""
     sorted_p  = sorted(piezas, key=lambda x: -x["dim"])
     sobrantes = []
     plan      = []
@@ -152,7 +203,7 @@ def resolver_con_largo(piezas, L):
 
 
 def elegir_mejor_plan(piezas, lens):
-    """Evalúa cada largo y elige el que minimiza el desperdicio global."""
+    """Evalúa cada largo fijo y elige el que minimiza el desperdicio global."""
     if not piezas or not lens:
         return []
     mejor_plan = None
@@ -170,72 +221,69 @@ def elegir_mejor_plan(piezas, lens):
 
 
 def calcular_piezas_l(largo_total, ancho_total, largo_recorte, ancho_recorte, idx, lens,
-                      otras_piezas=None):
+                      otras_piezas=None, esquina="inf_izq"):
     """
-    Calcula piezas para ambiente en L.
-    El usuario ingresa el RECORTE. Internamente calculamos el TRAMO que queda.
-    
-    Evalúa ambas orientaciones en el contexto global (otras_piezas) para
-    elegir la que minimiza el desperdicio total del conjunto.
-    Solo considera orientaciones donde TODAS las piezas entran en los largos disponibles.
+    Calcula piezas para ambiente en L según la esquina del recorte.
+    La lógica de filas y dimensiones de pieza varía según dónde esté el recorte.
+
+    ORIENT A (placas en dirección ANCHO, filas cuentan en LARGO):
+      piezas largas = ancho_total, piezas cortas = ancho_tramo
+      inf_*: filas_l=ceil(largo_tramo/PW),   filas_c=floor(largo_recorte/PW)
+      sup_*: filas_l=ceil(largo_recorte/PW), filas_c=floor(largo_tramo/PW)
+
+    ORIENT B (placas en dirección LARGO, filas cuentan en ANCHO):
+      piezas largas = largo_total
+      piezas cortas = el brazo que EXISTE en la sección parcial:
+        inf_*: largo_tramo   (el brazo existente es el tramo)
+        sup_*: largo_recorte (el brazo existente es el recorte)
+      filas_l = ceil(ancho_tramo/PW), filas_c = floor(ancho_recorte/PW)
     """
     largo_tramo = round(largo_total - largo_recorte, 4)
-    ancho_tramo = round(ancho_total  - ancho_recorte,  4)
-    otras = otras_piezas or []
+    ancho_tramo = round(ancho_total  - ancho_recorte, 4)
+    otras       = otras_piezas or []
+    es_sup      = esquina.startswith("sup")
 
-    # Orientación A: placas corren en dirección largo_total
-    # Orientación A: placas corren en dirección largo_total (horizontal)
-    # Las filas se cuentan horizontalmente.
-    # Tramo largo: ceil(largo_tramo/PW) filas — incluye la fila de esquina
-    # Tramo corto: floor(largo_recorte/PW) filas — sin la fila de esquina
-    # La dimensión de cada pieza es ancho_total o ancho_tramo (vertical)
-    filas_A_l = math.ceil(largo_tramo   / PW)   # filas del tramo largo (incluye esquina)
-    filas_A_c = math.floor(largo_recorte / PW)  # filas solo del tramo corto
-    piezas_A  = (
+    # Orientación A
+    if not es_sup:
+        filas_A_l = math.ceil(largo_tramo   / PW)
+        filas_A_c = math.floor(largo_recorte / PW)
+    else:
+        filas_A_l = math.ceil(largo_recorte / PW)
+        filas_A_c = math.floor(largo_tramo  / PW)
+    piezas_A = (
         [{"dim": ancho_total,  "hab_idx": idx}] * filas_A_l +
         [{"dim": ancho_tramo,  "hab_idx": idx}] * filas_A_c
     )
 
-    # Orientación B: placas corren en dirección ancho_total (vertical)
-    # Las filas se cuentan verticalmente.
-    filas_B_l = math.ceil(ancho_tramo   / PW)   # filas del tramo largo (incluye esquina)
-    filas_B_c = math.floor(ancho_recorte / PW)  # filas solo del tramo corto
+    # Orientación B
+    pieza_B_c = largo_tramo if not es_sup else largo_recorte
+    filas_B_l = math.ceil(ancho_tramo   / PW)
+    filas_B_c = math.floor(ancho_recorte / PW)
     piezas_B  = (
-        [{"dim": largo_total,  "hab_idx": idx}] * filas_B_l +
-        [{"dim": largo_tramo,  "hab_idx": idx}] * filas_B_c
+        [{"dim": largo_total, "hab_idx": idx}] * filas_B_l +
+        [{"dim": pieza_B_c,   "hab_idx": idx}] * filas_B_c
     )
 
-    # Verificar que todas las piezas entran en algún largo disponible
-    max_L = max(lens) if lens else 0
+    max_L    = max(lens) if lens else 0
     viable_A = all(p["dim"] <= max_L + 0.0001 for p in piezas_A)
     viable_B = all(p["dim"] <= max_L + 0.0001 for p in piezas_B)
 
+    def ret_A(): return "ancho", piezas_A, filas_A_l, filas_A_c, ancho_total, ancho_tramo
+    def ret_B(): return "largo", piezas_B, filas_B_l, filas_B_c, largo_total, pieza_B_c
+
     if not viable_A and not viable_B:
-        # Ninguna orientación funciona sin H — elegir la de menor piezas
-        plan_A = elegir_mejor_plan(piezas_A, lens)
-        plan_B = elegir_mejor_plan(piezas_B, lens)
-        n_A = len(plan_A) if plan_A else float("inf")
-        n_B = len(plan_B) if plan_B else float("inf")
-        if n_A <= n_B:
-            return "largo", piezas_A, filas_A_l, filas_A_c, largo_total, largo_tramo
-        else:
-            return "ancho", piezas_B, filas_B_l, filas_B_c, ancho_total, ancho_tramo
+        pA = elegir_mejor_plan(piezas_A, lens)
+        pB = elegir_mejor_plan(piezas_B, lens)
+        return ret_A() if (len(pA) if pA else float("inf")) <= (len(pB) if pB else float("inf")) else ret_B()
+    if not viable_A: return ret_B()
+    if not viable_B: return ret_A()
 
-    if not viable_A:
-        return "ancho", piezas_B, filas_B_l, filas_B_c, ancho_total, ancho_tramo
-    if not viable_B:
-        return "largo", piezas_A, filas_A_l, filas_A_c, largo_total, largo_tramo
-
-    # Ambas viables: evaluar en contexto global
-    plan_A = elegir_mejor_plan(otras + piezas_A, lens)
-    plan_B = elegir_mejor_plan(otras + piezas_B, lens)
-    n_A = len(plan_A) if plan_A else float("inf")
-    n_B = len(plan_B) if plan_B else float("inf")
-
-    if n_A <= n_B:
-        return "largo", piezas_A, filas_A_l, filas_A_c, largo_total, largo_tramo
-    else:
-        return "ancho", piezas_B, filas_B_l, filas_B_c, ancho_total, ancho_tramo
+    # Ambas viables: evaluar en contexto global con motor mixto
+    plan_A = resolver_mixto(otras + piezas_A, lens)
+    plan_B = resolver_mixto(otras + piezas_B, lens)
+    n_A    = len(plan_A) if plan_A else float("inf")
+    n_B    = len(plan_B) if plan_B else float("inf")
+    return ret_A() if n_A <= n_B else ret_B()
 
 
 def diagrama_l_svg(lt, at, lr, ar, color, esquina="inf_izq"):
@@ -422,14 +470,19 @@ def hab_perim(h):
         return round(lt + at + lr_rec + ar_rec + (lt - lr_rec) + (at - ar_rec), 4)
     return round(2 * (h.get("largo", 0) + h.get("ancho", 0)), 4)
 
-def calcular_estructura(largo, ancho, altura, orientacion):
+def calcular_estructura(largo, ancho, altura, orientacion,
+                        area_real=None, perim_real=None):
+    """
+    Calcula estructura. Para habitaciones en L, pasar area_real y perim_real
+    para que T1, T2, molduras y tarugos sean correctos.
+    """
     if orientacion == "largo":
         dim_paralela, dim_transversal = largo, ancho
     else:
         dim_paralela, dim_transversal = ancho, largo
 
-    P   = (largo + ancho) * 2
-    SP  = math.ceil(P / LARGO_PERFIL)
+    P  = perim_real if perim_real is not None else (largo + ancho) * 2
+    SP = math.ceil(P / LARGO_PERFIL)
 
     lineas_maestras  = max(0, math.ceil(dim_transversal / SEP_MAESTRAS) - 1)
     metros_maestras  = lineas_maestras * dim_paralela
@@ -444,10 +497,10 @@ def calcular_estructura(largo, ancho, altura, orientacion):
     lineas_montantes = math.ceil(dim_paralela / SEP_MONTANTES) + 1
     total_montantes  = math.ceil(lineas_montantes * dim_transversal / LARGO_PERFIL)
 
-    total_molduras   = math.ceil(P / LARGO_MOLDURA)
-    total_tarugos    = math.ceil(P / DIST_TARUGOS) + total_velas
+    total_molduras = math.ceil(P / LARGO_MOLDURA)
+    total_tarugos  = math.ceil(P / DIST_TARUGOS) + total_velas
 
-    area     = largo * ancho
+    area     = area_real if area_real is not None else largo * ancho
     total_t1 = math.ceil(area * TORNILLOS_T1_M2)
     total_t2 = math.ceil(area * TORNILLOS_T2_M2)
 
@@ -583,7 +636,7 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
         area  = hab_area(h)
         perim = hab_perim(h)
         dir_  = ("→ largo" if h["orient"]=="largo" else "↓ ancho")+(" (fijo)" if h["fijo"] else "")
-        varillas_h = math.ceil(h["n_h"] * h.get("dim_pieza_orig",h["dim_pieza"]) / LARGO_H) if h["n_h"]>0 else 0
+        varillas_h = (math.ceil(dim_transversal_h(h) / LARGO_H) * h["n_h"]) if h["n_h"]>0 else 0
         prows.append([h["nombre"], f"{area:.2f}", dir_,
                       f"{h['dim_pieza']}m", str(h["filas"]), f"{perim:.1f}",
                       str(h["n_h"]) if h["n_h"]>0 else "—",
@@ -882,7 +935,9 @@ for i, h in enumerate(habs):
         # Pasar piezas ya calculadas de otras habitaciones como contexto global
         otras_piezas_ctx = [p for h2 in hab_info for p in h2["piezas"]]
         orient, piezas, filas_l, filas_c, dim_larga, dim_corta = calcular_piezas_l(
-            lt, at, lr_rec, ar_rec, i, lens, otras_piezas=otras_piezas_ctx)
+            lt, at, lr_rec, ar_rec, i, lens,
+            otras_piezas=otras_piezas_ctx,
+            esquina=h.get("esquina", "inf_izq"))
         filas      = filas_l + filas_c
         dim_pieza  = dim_larga   # dim principal para referencia
         segmentos  = [dim_larga]
@@ -961,7 +1016,7 @@ if usar_h:
                     break
 
 todas_piezas = [p for h in hab_info for p in h["piezas"]]
-plan = elegir_mejor_plan(todas_piezas, lens)
+plan = resolver_mixto(todas_piezas, lens)
 
 conteo = {4:0, 5:0, 6:0}
 for b in plan:
@@ -979,12 +1034,26 @@ pct_desp = ((metros_comp-metros_us)/metros_comp*100) if metros_comp>0 else 0
 # Perfiles H totales
 tot_h_perfiles = sum(h["n_h"] for h in hab_info)
 # Varillas de perfil H a comprar (cada perfil H mide 4m, necesita cubrir el largo de la habitación)
+def dim_transversal_h(h):
+    """Longitud del perfil H = dimensión perpendicular al sentido de las placas."""
+    if h.get("tipo") == "l":
+        # Para L: la dimensión transversal es el ancho total del ambiente
+        return hab_ancho(h) if h.get("orient") == "largo" else hab_largo(h)
+    return h.get("ancho", 0) if h.get("orient") == "largo" else h.get("largo", 0)
+
 tot_h_varillas = sum(
-    math.ceil(h["n_h"] * h["dim_pieza"] / LARGO_H) for h in hab_info if h["n_h"] > 0
+    math.ceil(dim_transversal_h(h) / LARGO_H) * h["n_h"]
+    for h in hab_info if h["n_h"] > 0
 )
 
-estructuras = {h["nombre"]: calcular_estructura(
-    hab_largo(h), hab_ancho(h), h.get("altura",0.30), h["orient"]) for h in hab_info}
+estructuras = {}
+for _h in hab_info:
+    _area  = _h.get("area_real")
+    _perim = hab_perim(_h) if _h.get("tipo") == "l" else None
+    estructuras[_h["nombre"]] = calcular_estructura(
+        hab_largo(_h), hab_ancho(_h), _h.get("altura", 0.30), _h["orient"],
+        area_real=_area, perim_real=_perim
+    )
 
 tot_sol  = sum(e["total_soleras"]   for e in estructuras.values())
 tot_mon  = sum(e["total_montantes"] for e in estructuras.values())
@@ -1041,7 +1110,7 @@ st.subheader("🔧 Estructura por habitación")
 filas_est = []
 for h in hab_info:
     e = estructuras[h["nombre"]]
-    varillas = math.ceil(h["n_h"] * h["dim_pieza"] / LARGO_H) if h["n_h"]>0 else 0
+    varillas = (math.ceil(dim_transversal_h(h) / LARGO_H) * h["n_h"]) if h["n_h"]>0 else 0
     h_txt = f"{h['n_h']} H ({varillas} var.)" if h["n_h"]>0 else "—"
     filas_est.append({
         "Habitación":          h["nombre"],
@@ -1075,7 +1144,7 @@ st.markdown(leyenda, unsafe_allow_html=True)
 # Avisos H por habitación
 for h in hab_info:
     if h["n_h"] > 0:
-        varillas = math.ceil(h["n_h"] * h["dim_pieza"] / LARGO_H)
+        varillas = math.ceil(dim_transversal_h(h) / LARGO_H) * h["n_h"]
         segs_txt = " + ".join(f"{s}m" for s in h["segmentos"])
         if h["auto_h"]:
             origen = "obligatorio — dimensión supera largo máximo de placa"
@@ -1152,7 +1221,7 @@ for h in hab_info:
     es_l  = h.get("tipo") == "l"
     area  = h.get("area_real", hab_area(h))
     perim = hab_perim(h)
-    varillas = math.ceil(h["n_h"] * h["dim_pieza"] / LARGO_H) if h["n_h"]>0 else 0
+    varillas = (math.ceil(dim_transversal_h(h) / LARGO_H) * h["n_h"]) if h["n_h"]>0 else 0
     if es_l:
         segs_txt = (f"{h['dim_larga']}m ({h['filas_l']} filas) + "
                     f"{h['dim_corta']}m ({h['filas_c']} filas)")
