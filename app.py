@@ -169,6 +169,84 @@ def elegir_mejor_plan(piezas, lens):
     return mejor_plan or []
 
 
+def calcular_piezas_l(largo_total, ancho_total, largo_reducido, ancho_reducido, idx, lens):
+    """
+    Calcula piezas para ambiente en L.
+    Orientación A: placas corren en dirección largo_total.
+      - ceil(ancho_total/PW) filas de largo_total  (incluye fila de esquina)
+      - ceil(ancho_reducido/PW) filas de largo_reducido
+    Orientación B: placas corren en dirección ancho_total (L rotada 90°).
+    Elige la orientación con menor número de placas.
+    """
+    filas_A_l = math.ceil(ancho_total    / PW)
+    filas_A_c = math.ceil(ancho_reducido / PW)
+    piezas_A  = (
+        [{"dim": largo_total,    "hab_idx": idx}] * filas_A_l +
+        [{"dim": largo_reducido, "hab_idx": idx}] * filas_A_c
+    )
+
+    filas_B_l = math.ceil(largo_total    / PW)
+    filas_B_c = math.ceil(largo_reducido / PW)
+    piezas_B  = (
+        [{"dim": ancho_total,    "hab_idx": idx}] * filas_B_l +
+        [{"dim": ancho_reducido, "hab_idx": idx}] * filas_B_c
+    )
+
+    plan_A = elegir_mejor_plan(piezas_A, lens)
+    plan_B = elegir_mejor_plan(piezas_B, lens)
+    n_A = len(plan_A) if plan_A else float("inf")
+    n_B = len(plan_B) if plan_B else float("inf")
+
+    if n_A <= n_B:
+        return "largo", piezas_A, filas_A_l, filas_A_c, largo_total, largo_reducido
+    else:
+        return "ancho", piezas_B, filas_B_l, filas_B_c, ancho_total, ancho_reducido
+
+
+def diagrama_l_svg(lt, at, lr, ar, color):
+    """SVG que muestra la forma L con medidas."""
+    scale  = 120 / max(lt, at + ar)
+    W_svg  = int(lt * scale) + 70
+    H_svg  = int((at + ar) * scale) + 50
+    x0, y0 = 30, 12
+    wt = int(lt * scale)
+    hat = int(at * scale)
+    wlr = int(lr * scale)
+    har = int(ar * scale)
+    pts = (
+        f"{x0},{y0} {x0+wt},{y0} {x0+wt},{y0+hat} "
+        f"{x0+wlr},{y0+hat} {x0+wlr},{y0+hat+har} {x0},{y0+hat+har}"
+    )
+    c = color
+    lines = (
+        # largo total (arriba)
+        '<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="1"/>'.format(
+            x0, y0-6, x0+wt, y0-6, c) +
+        '<text x="{}" y="{}" fill="{}" font-size="10" text-anchor="middle">{}m</text>'.format(
+            x0+wt//2, y0-9, c, lt) +
+        # ancho total (derecha)
+        '<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="1"/>'.format(
+            x0+wt+4, y0, x0+wt+4, y0+hat, c) +
+        '<text x="{}" y="{}" fill="{}" font-size="10" text-anchor="middle">{}m</text>'.format(
+            x0+wt+18, y0+hat//2+4, c, at) +
+        # largo reducido (abajo)
+        '<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="1"/>'.format(
+            x0, y0+hat+har+7, x0+wlr, y0+hat+har+7, c) +
+        '<text x="{}" y="{}" fill="{}" font-size="10" text-anchor="middle">{}m</text>'.format(
+            x0+wlr//2, y0+hat+har+19, c, lr) +
+        # ancho reducido (derecha del tramo corto)
+        '<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="1"/>'.format(
+            x0+wlr+4, y0+hat, x0+wlr+4, y0+hat+har, c) +
+        '<text x="{}" y="{}" fill="{}" font-size="10" text-anchor="middle">{}m</text>'.format(
+            x0+wlr+18, y0+hat+har//2+4, c, ar)
+    )
+    return (
+        '<svg width="{}" height="{}" xmlns="http://www.w3.org/2000/svg">'
+        '<polygon points="{}" fill="{}22" stroke="{}" stroke-width="2"/>'
+        '{}</svg>'
+    ).format(W_svg, H_svg, pts, c, c, lines)
+
+
 def orientacion_optima(r, idx, lens_efectivos):
     """
     Elige orientación minimizando placas y desperdicio.
@@ -529,46 +607,101 @@ if "habitaciones" not in st.session_state:
 def agregar():
     n = len(st.session_state.habitaciones)+1
     st.session_state.habitaciones.append(
-        {"nombre":f"Habitación {n}","largo":0.1,"ancho":0.1,"altura":0.30,"fijo":False,"forzar_h":False})
+        {"nombre": f"Habitación {n}", "tipo": "rect",
+         "largo": 0.1, "ancho": 0.1, "altura": 0.30,
+         "fijo": False, "forzar_h": False})
+
+def agregar_l():
+    n = len(st.session_state.habitaciones)+1
+    st.session_state.habitaciones.append(
+        {"nombre": f"Ambiente L {n}", "tipo": "l",
+         "largo_total": 4.0, "ancho_total": 1.5,
+         "largo_reducido": 2.0, "ancho_reducido": 0.8,
+         "altura": 0.30, "forzar_h": False})
 
 def eliminar(i):
     st.session_state.habitaciones.pop(i)
 
 for i, hab in enumerate(st.session_state.habitaciones):
-    color = HAB_COLORS[i%len(HAB_COLORS)]
+    color    = HAB_COLORS[i%len(HAB_COLORS)]
+    es_l     = hab.get("tipo") == "l"
+    h_altura = "140px" if es_l else "100px"
     col_color, col_form = st.columns([0.015, 0.985])
     with col_color:
-        st.markdown(f'<div style="background:{color};width:6px;height:100px;'
-                    f'border-radius:4px;margin-top:4px"></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="background:{color};width:6px;height:{h_altura};'
+            f'border-radius:4px;margin-top:4px"></div>',
+            unsafe_allow_html=True)
     with col_form:
         with st.container(border=True):
-            c1,c2,c3,c4,c5,c6,c7 = st.columns([2.2,1.2,1.2,1.2,1.6,1.4,0.5])
-            with c1:
-                hab["nombre"] = st.text_input("Nombre", value=hab["nombre"],
-                                               key=f"nom_{i}", label_visibility="collapsed")
-            with c2:
-                hab["largo"]  = st.number_input("Largo (m)", value=hab["largo"],
-                                                 step=0.1, min_value=0.1, key=f"lar_{i}")
-            with c3:
-                hab["ancho"]  = st.number_input("Ancho (m)", value=hab["ancho"],
-                                                 step=0.1, min_value=0.1, key=f"anc_{i}")
-            with c4:
-                hab["altura"] = st.number_input("Alt. susp.", value=hab.get("altura",0.30),
-                                                 step=0.05, min_value=0.05, key=f"alt_{i}")
-            with c5:
-                hab["fijo"]     = st.checkbox("Sentido fijo (→)", value=hab["fijo"], key=f"fij_{i}")
-            with c6:
-                hab["forzar_h"] = st.checkbox("🔗 Usar H", value=hab.get("forzar_h",False),
-                                               key=f"fh_{i}",
-                                               help="Activa perfil H. Si la placa no alcanza, es obligatorio. Si alcanza, el motor busca el corte óptimo con H que ahorre más placas.")
-            with c7:
-                st.write("")
-                if st.button("🗑️", key=f"del_{i}",
-                             disabled=len(st.session_state.habitaciones)<=1):
-                    eliminar(i)
-                    st.rerun()
+            if es_l:
+                # ── Habitación en L ──────────────────────────────────────
+                r1c1, r1c2, r1c3, r1c4, r1c5, r1c6, r1c7 = st.columns([2.2,1.1,1.1,1.1,1.1,1.2,0.5])
+                with r1c1:
+                    hab["nombre"] = st.text_input("Nombre", value=hab["nombre"],
+                                                   key=f"nom_{i}", label_visibility="collapsed")
+                with r1c2:
+                    hab["largo_total"]    = st.number_input("Largo total",    value=hab["largo_total"],
+                                                             step=0.1, min_value=0.1, key=f"lt_{i}")
+                with r1c3:
+                    hab["ancho_total"]    = st.number_input("Ancho total",    value=hab["ancho_total"],
+                                                             step=0.1, min_value=0.1, key=f"at_{i}")
+                with r1c4:
+                    hab["largo_reducido"] = st.number_input("Largo reducido", value=hab["largo_reducido"],
+                                                             step=0.1, min_value=0.1, key=f"lr_{i}")
+                with r1c5:
+                    hab["ancho_reducido"] = st.number_input("Ancho reducido", value=hab["ancho_reducido"],
+                                                             step=0.1, min_value=0.1, key=f"ar_{i}")
+                with r1c6:
+                    hab["altura"]  = st.number_input("Alt. susp.", value=hab.get("altura",0.30),
+                                                      step=0.05, min_value=0.05, key=f"alt_{i}")
+                with r1c7:
+                    st.write("")
+                    if st.button("🗑️", key=f"del_{i}",
+                                 disabled=len(st.session_state.habitaciones)<=1):
+                        eliminar(i)
+                        st.rerun()
+                # Diagrama SVG + info de orientación
+                try:
+                    svg_l = diagrama_l_svg(
+                        hab["largo_total"], hab["ancho_total"],
+                        hab["largo_reducido"], hab["ancho_reducido"], color)
+                    st.markdown(svg_l, unsafe_allow_html=True)
+                except Exception:
+                    pass
+            else:
+                # ── Habitación rectangular normal ─────────────────────────
+                c1,c2,c3,c4,c5,c6,c7 = st.columns([2.2,1.2,1.2,1.2,1.6,1.4,0.5])
+                with c1:
+                    hab["nombre"] = st.text_input("Nombre", value=hab["nombre"],
+                                                   key=f"nom_{i}", label_visibility="collapsed")
+                with c2:
+                    hab["largo"]  = st.number_input("Largo (m)", value=hab["largo"],
+                                                     step=0.1, min_value=0.1, key=f"lar_{i}")
+                with c3:
+                    hab["ancho"]  = st.number_input("Ancho (m)", value=hab["ancho"],
+                                                     step=0.1, min_value=0.1, key=f"anc_{i}")
+                with c4:
+                    hab["altura"] = st.number_input("Alt. susp.", value=hab.get("altura",0.30),
+                                                     step=0.05, min_value=0.05, key=f"alt_{i}")
+                with c5:
+                    hab["fijo"]     = st.checkbox("Sentido fijo (→)", value=hab["fijo"], key=f"fij_{i}")
+                with c6:
+                    hab["forzar_h"] = st.checkbox("🔗 Usar H", value=hab.get("forzar_h",False),
+                                                   key=f"fh_{i}",
+                                                   help="Activa perfil H. Si la placa no alcanza, es obligatorio. Si alcanza, el motor busca el corte óptimo que ahorre más placas.")
+                with c7:
+                    st.write("")
+                    if st.button("🗑️", key=f"del_{i}",
+                                 disabled=len(st.session_state.habitaciones)<=1):
+                        eliminar(i)
+                        st.rerun()
 
-st.button("➕ Agregar habitación", on_click=agregar)
+col_btn1, col_btn2 = st.columns([1, 1])
+with col_btn1:
+    st.button("➕ Agregar habitación", on_click=agregar)
+with col_btn2:
+    st.button("📐 Agregar habitación en L", on_click=agregar_l)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CÁLCULO
@@ -585,26 +718,55 @@ habs = st.session_state.habitaciones
 # Paso 1: determinar orientación de cada habitación (sin H opcional aún)
 hab_info = []
 for i, h in enumerate(habs):
-    orient, dim_pieza, filas, piezas, segmentos, n_h = orientacion_optima(h, i, lens)
+    es_l = h.get("tipo") == "l"
 
-    # H desactivado globalmente
-    if not usar_h:
-        if necesita_h(dim_pieza, lens):
-            st.warning(f"⚠️ **{h['nombre']}**: {dim_pieza}m supera el largo máximo "
-                       f"disponible ({max(lens)}m). Activá el perfil H en la barra lateral.")
-        n_h       = 0
-        segmentos = [dim_pieza]
-        piezas    = [{"dim": dim_pieza, "hab_idx": i}] * filas
+    if es_l:
+        # ── Ambiente en L ────────────────────────────────────────────────
+        lt  = h["largo_total"]
+        at  = h["ancho_total"]
+        lr  = h["largo_reducido"]
+        ar  = h["ancho_reducido"]
+        orient, piezas, filas_l, filas_c, dim_larga, dim_corta = calcular_piezas_l(
+            lt, at, lr, ar, i, lens)
+        filas      = filas_l + filas_c
+        dim_pieza  = dim_larga   # dim principal para referencia
+        segmentos  = [dim_larga]
+        n_h        = 0
+        area_l     = lt * at - (lt - lr) * ar   # área real de la L
+        hab_info.append({
+            **h, "idx": i, "orient": orient,
+            "dim_pieza": dim_pieza, "dim_pieza_orig": dim_pieza,
+            "filas": filas, "filas_l": filas_l, "filas_c": filas_c,
+            "dim_larga": dim_larga, "dim_corta": dim_corta,
+            "piezas": piezas, "segmentos": segmentos,
+            "n_h": 0, "varillas_h": 0,
+            "auto_h": False, "h_opcional_aplicado": False,
+            "area_real": round(area_l, 4),
+            "largo": lt, "ancho": at,  # para compatibilidad con estructura
+            "fijo": False, "forzar_h": False,
+        })
+    else:
+        # ── Habitación rectangular normal ─────────────────────────────────
+        orient, dim_pieza, filas, piezas, segmentos, n_h = orientacion_optima(h, i, lens)
 
-    hab_info.append({
-        **h, "idx": i, "orient": orient,
-        "dim_pieza": dim_pieza, "dim_pieza_orig": dim_pieza,
-        "filas": filas, "piezas": piezas,
-        "segmentos": segmentos, "n_h": n_h,
-        "varillas_h": n_h,
-        "auto_h": necesita_h(dim_pieza, lens) and usar_h,
-        "h_opcional_aplicado": False,
-    })
+        if not usar_h:
+            if necesita_h(dim_pieza, lens):
+                st.warning(f"⚠️ **{h['nombre']}**: {dim_pieza}m supera el largo máximo "
+                           f"disponible ({max(lens)}m). Activá el perfil H en la barra lateral.")
+            n_h       = 0
+            segmentos = [dim_pieza]
+            piezas    = [{"dim": dim_pieza, "hab_idx": i}] * filas
+
+        hab_info.append({
+            **h, "idx": i, "orient": orient,
+            "dim_pieza": dim_pieza, "dim_pieza_orig": dim_pieza,
+            "filas": filas, "piezas": piezas,
+            "segmentos": segmentos, "n_h": n_h,
+            "varillas_h": n_h,
+            "auto_h": necesita_h(dim_pieza, lens) and usar_h,
+            "h_opcional_aplicado": False,
+            "area_real": round(h["largo"] * h["ancho"], 4),
+        })
 
 # Paso 2: para habitaciones con "Usar H" opcional (no obligatorio),
 # buscar el corte que maximiza el ahorro de placas en el contexto global.
@@ -832,18 +994,28 @@ st.subheader("🏠 Detalle de placas por habitación")
 
 filas_plac = []
 for h in hab_info:
-    area  = h["largo"]*h["ancho"]
+    es_l  = h.get("tipo") == "l"
+    area  = h.get("area_real", h["largo"]*h["ancho"])
     perim = 2*(h["largo"]+h["ancho"])
-    segs_txt = " + ".join(f"{s}m" for s in h["segmentos"]) if h["n_h"]>0 else f"{h['dim_pieza']}m"
     varillas = math.ceil(h["n_h"] * h["dim_pieza"] / LARGO_H) if h["n_h"]>0 else 0
+    if es_l:
+        segs_txt = (f"{h['dim_larga']}m ({h['filas_l']} filas) + "
+                    f"{h['dim_corta']}m ({h['filas_c']} filas)")
+        dir_txt  = f"→ largo total" if h["orient"]=="largo" else "↓ ancho total"
+        tipo_txt = "📐 L"
+    else:
+        segs_txt = " + ".join(f"{s}m" for s in h["segmentos"]) if h["n_h"]>0 else f"{h['dim_pieza']}m"
+        dir_txt  = ("→ largo" if h["orient"]=="largo" else "↓ ancho")+(" (fijo)" if h.get("fijo") else "")
+        tipo_txt = "▭"
     filas_plac.append({
-        "Habitación":      h["nombre"],
-        "Área (m²)":       round(area,2),
-        "Dirección":       ("→ largo" if h["orient"]=="largo" else "↓ ancho")+(" (fijo)" if h["fijo"] else ""),
-        "Corte por fila":  segs_txt,
-        "Filas":           h["filas"],
-        "Perím. (m)":      round(perim,1),
-        "Perfil H":        f"{h['n_h']} H / {varillas} var." if h["n_h"]>0 else "—",
+        "Tipo":           tipo_txt,
+        "Habitación":     h["nombre"],
+        "Área (m²)":      round(area, 2),
+        "Dirección":      dir_txt,
+        "Corte por fila": segs_txt,
+        "Filas totales":  h["filas"],
+        "Perím. (m)":     round(perim, 1),
+        "Perfil H":       f"{h['n_h']} H / {varillas} var." if h["n_h"]>0 else "—",
     })
 st.dataframe(pd.DataFrame(filas_plac), use_container_width=True, hide_index=True)
 
