@@ -317,6 +317,30 @@ def orientacion_optima(r, idx, lens_efectivos):
 # ESTRUCTURA
 # ═══════════════════════════════════════════════════════════════════════════
 
+def hab_largo(h):
+    """Retorna el largo principal de la habitación (largo_total para L, largo para rect)."""
+    return h.get("largo_total", h.get("largo", 0))
+
+def hab_ancho(h):
+    """Retorna el ancho principal de la habitación."""
+    return h.get("ancho_total", h.get("ancho", 0))
+
+def hab_area(h):
+    """Retorna el área real de la habitación."""
+    if h.get("tipo") == "l":
+        lt, at = h["largo_total"], h["ancho_total"]
+        lr, ar = h["largo_reducido"], h["ancho_reducido"]
+        return round(lt * at - (lt - lr) * ar, 4)
+    return round(h.get("largo", 0) * h.get("ancho", 0), 4)
+
+def hab_perim(h):
+    """Retorna el perímetro de la habitación."""
+    if h.get("tipo") == "l":
+        lt, at = h["largo_total"], h["ancho_total"]
+        lr, ar = h["largo_reducido"], h["ancho_reducido"]
+        return round(2 * (lt + at + (lt - lr) + ar), 4)
+    return round(2 * (h.get("largo", 0) + h.get("ancho", 0)), 4)
+
 def calcular_estructura(largo, ancho, altura, orientacion):
     if orientacion == "largo":
         dim_paralela, dim_transversal = largo, ancho
@@ -475,8 +499,8 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     ph = ["Habitación","Área (m²)","Dirección","Dim. placa","Filas","Perím.","Perf. H","Varillas H (4m)"]
     prows = [ph]
     for h in hab_info:
-        area  = h["largo"]*h["ancho"]
-        perim = 2*(h["largo"]+h["ancho"])
+        area  = hab_area(h)
+        perim = hab_perim(h)
         dir_  = ("→ largo" if h["orient"]=="largo" else "↓ ancho")+(" (fijo)" if h["fijo"] else "")
         varillas_h = math.ceil(h["n_h"] * h.get("dim_pieza_orig",h["dim_pieza"]) / LARGO_H) if h["n_h"]>0 else 0
         prows.append([h["nombre"], f"{area:.2f}", dir_,
@@ -794,7 +818,7 @@ for i, h in enumerate(habs):
             "varillas_h": n_h,
             "auto_h": necesita_h(dim_pieza, lens) and usar_h,
             "h_opcional_aplicado": False,
-            "area_real": round(h["largo"] * h["ancho"], 4),
+            "area_real": hab_area(h),
         })
 
 # Paso 2: para habitaciones con "Usar H" opcional (no obligatorio),
@@ -841,7 +865,7 @@ conteo = {4:0, 5:0, 6:0}
 for b in plan:
     conteo[b["largo_placa"]] += 1
 total_placas = len(plan)
-total_area   = sum(h["largo"]*h["ancho"] for h in habs)
+total_area   = sum(hab_area(h) for h in habs)
 
 metros_comp       = sum(b["largo_placa"] for b in plan)
 metros_us         = sum(p["dim"] for p in todas_piezas)
@@ -858,7 +882,7 @@ tot_h_varillas = sum(
 )
 
 estructuras = {h["nombre"]: calcular_estructura(
-    h["largo"], h["ancho"], h.get("altura",0.30), h["orient"]) for h in hab_info}
+    hab_largo(h), hab_ancho(h), h.get("altura",0.30), h["orient"]) for h in hab_info}
 
 tot_sol  = sum(e["total_soleras"]   for e in estructuras.values())
 tot_mon  = sum(e["total_montantes"] for e in estructuras.values())
@@ -1024,8 +1048,8 @@ st.subheader("🏠 Detalle de placas por habitación")
 filas_plac = []
 for h in hab_info:
     es_l  = h.get("tipo") == "l"
-    area  = h.get("area_real", h["largo"]*h["ancho"])
-    perim = 2*(h["largo"]+h["ancho"])
+    area  = h.get("area_real", hab_area(h))
+    perim = hab_perim(h)
     varillas = math.ceil(h["n_h"] * h["dim_pieza"] / LARGO_H) if h["n_h"]>0 else 0
     if es_l:
         segs_txt = (f"{h['dim_larga']}m ({h['filas_l']} filas) + "
