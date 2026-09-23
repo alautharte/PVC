@@ -37,15 +37,32 @@ PW              = 0.20   # ancho de placa — fijo 20 cm
 LARGO_PERFIL    = 2.60
 LARGO_MOLDURA   = 4.00
 LARGO_H         = 4.00   # perfil H — 4 m
+MIN_TRAMO_H     = 0.30   # tramo mínimo razonable al partir una tira con H
 SEP_MAESTRAS    = 1.20
 SEP_VELAS       = 1.00
 SEP_MONTANTES   = 0.50
 DIST_TARUGOS    = 0.50
 TORNILLOS_T1_M2 = 12
 TORNILLOS_T2_M2 =  5
+EPS             = 1e-4
 
 st.title("🏠 Presupuestador Cielorrasos PVC")
 st.caption("Optimización global de corte — mezcla de largos, perfiles H, colores por habitación")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# UTILIDADES
+# ═══════════════════════════════════════════════════════════════════════════
+
+def n_filas(dim):
+    """Cantidad de filas de placa (20 cm) para cubrir 'dim' metros."""
+    return math.ceil(round(dim / PW, 6))
+
+
+def varillas_h(lineas, largo_linea):
+    """Varillas de H de 4 m para 'lineas' líneas de unión de 'largo_linea' metros."""
+    if lineas <= 0 or largo_linea <= 0:
+        return 0
+    return lineas * math.ceil(round(largo_linea / LARGO_H, 6))
 
 # ═══════════════════════════════════════════════════════════════════════════
 # LÓGICA DE PERFIL H
@@ -53,26 +70,25 @@ st.caption("Optimización global de corte — mezcla de largos, perfiles H, colo
 
 def dividir_con_h(dim, lens):
     """
-    Cuando dim > max(lens), divide en segmentos equitativos usando largos disponibles.
-    Retorna: (segmentos: [float], n_perfiles_h: int)
+    Divide una tira más larga que la placa máxima en tramos que entren.
+    Usa tramos del largo máximo y, si el último tramo queda muy corto
+    (< MIN_TRAMO_H), reparte los dos últimos en partes iguales.
+    Retorna: (segmentos: [float], uniones_por_tira: int)
     """
     max_L = max(lens)
-    if dim <= max_L:
+    if dim <= max_L + EPS:
         return [dim], 0
 
-    n_tramos  = math.ceil(dim / max_L)
-    segmentos = []
-    restante  = dim
-    for t in range(n_tramos):
-        if t < n_tramos - 1:
-            for L in sorted(lens, reverse=True):
-                if L <= restante - (n_tramos - t - 1) * 0.1:
-                    segmentos.append(L)
-                    restante = round(restante - L, 4)
-                    break
-        else:
-            segmentos.append(round(restante, 4))
+    n_tramos  = math.ceil(round(dim / max_L, 6))
+    segmentos = [float(max_L)] * (n_tramos - 1)
+    resto     = round(dim - max_L * (n_tramos - 1), 4)
 
+    if resto < MIN_TRAMO_H:
+        ultimo        = round(segmentos[-1] + resto, 4)
+        segmentos[-1] = round(ultimo / 2, 4)
+        resto         = round(ultimo - segmentos[-1], 4)
+
+    segmentos.append(resto)
     return segmentos, n_tramos - 1
 
 
@@ -83,12 +99,10 @@ def mejor_corte_h_opcional(dim, filas, hab_idx, todas_piezas_sin_hab, lens):
     Criterio de mejora: menos placas totales.
     Retorna (seg1, seg2, plan_mejorado) o None si ningún corte mejora.
     """
-    # Plan base sin H para esta habitación
     piezas_base = [{"dim": dim, "hab_idx": hab_idx}] * filas
     plan_base   = elegir_mejor_plan(todas_piezas_sin_hab + piezas_base, lens)
     n_base      = len(plan_base)
 
-    # Candidatos a seg1: sobrantes naturales = L - d para cada largo L y dim d del pool
     dims_pool = set(round(p["dim"], 3) for p in todas_piezas_sin_hab)
     candidatos = set()
     for L in lens:
@@ -96,17 +110,16 @@ def mejor_corte_h_opcional(dim, filas, hab_idx, todas_piezas_sin_hab, lens):
             sobra = round(L - d, 4)
             if 0.05 < sobra < dim - 0.05 and sobra <= max(lens):
                 candidatos.add(sobra)
-        # También agregar la mitad exacta
         candidatos.add(round(dim / 2, 4))
 
     mejor_plan = None
-    mejor_n    = n_base  # solo mejorar si hay menos placas
+    mejor_n    = n_base
 
     for seg1 in sorted(candidatos):
         seg2 = round(dim - seg1, 4)
-        if seg2 < 0.05 or seg2 > max(lens) + 0.0001:
+        if seg2 < 0.05 or seg2 > max(lens) + EPS:
             continue
-        if seg1 > max(lens) + 0.0001:
+        if seg1 > max(lens) + EPS:
             continue
 
         piezas_h = []
@@ -115,7 +128,7 @@ def mejor_corte_h_opcional(dim, filas, hab_idx, todas_piezas_sin_hab, lens):
             piezas_h.append({"dim": seg2, "hab_idx": hab_idx})
 
         plan_h = elegir_mejor_plan(todas_piezas_sin_hab + piezas_h, lens)
-        if len(plan_h) < mejor_n:
+        if plan_h and len(plan_h) < mejor_n:
             mejor_n    = len(plan_h)
             mejor_plan = (seg1, seg2, plan_h)
 
@@ -124,7 +137,7 @@ def mejor_corte_h_opcional(dim, filas, hab_idx, todas_piezas_sin_hab, lens):
 
 def necesita_h(dim, lens):
     """True si la dimensión supera el largo máximo disponible."""
-    return dim > max(lens) + 0.0001 if lens else False
+    return dim > max(lens) + EPS if lens else False
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MOTOR DE CORTE GLOBAL (heurísticas — se usan como respaldo)
@@ -134,7 +147,7 @@ def mejor_largo_para_pieza(d, lens):
     """Largo de placa con menor desperdicio para una pieza de dimensión d."""
     best_L, best_desp = None, float("inf")
     for L in lens:
-        if L < d - 0.0001:
+        if L < d - EPS:
             continue
         n = math.floor(L / d) if d > 0 else 0
         if n == 0:
@@ -150,6 +163,8 @@ def resolver_mixto(piezas, lens):
     """
     Bin-packing 1D MIXTO: para cada pieza elige el largo de placa con
     menor desperdicio individual, reutilizando sobrantes entre piezas.
+    Retorna None si alguna pieza no entra en ninguna placa (antes la salteaba
+    en silencio y el resultado quedaba con desperdicio negativo).
     """
     if not piezas or not lens:
         return []
@@ -157,11 +172,10 @@ def resolver_mixto(piezas, lens):
     sobrantes = []
     plan      = []
     for p in sorted_p:
-        # Intentar usar sobrante existente (el más ajustado)
         sobrantes.sort(key=lambda s: s["libre"])
         usado = False
         for s in sobrantes:
-            if s["libre"] >= p["dim"] - 0.0001:
+            if s["libre"] >= p["dim"] - EPS:
                 bin_ = plan[s["plan_idx"]]
                 bin_["cortes"].append({"dim": p["dim"], "hab_idx": p["hab_idx"]})
                 s["libre"]    = max(0.0, s["libre"] - p["dim"])
@@ -171,7 +185,7 @@ def resolver_mixto(piezas, lens):
         if not usado:
             L = mejor_largo_para_pieza(p["dim"], lens)
             if L is None:
-                continue
+                return None
             libre = max(0.0, L - p["dim"])
             idx   = len(plan)
             plan.append({"largo_placa": L,
@@ -187,12 +201,12 @@ def resolver_con_largo(piezas, L):
     sobrantes = []
     plan      = []
     for p in sorted_p:
-        if L < p["dim"] - 0.0001:
+        if L < p["dim"] - EPS:
             return None
         sobrantes.sort(key=lambda s: s["libre"])
         usado = False
         for s in sobrantes:
-            if s["libre"] >= p["dim"] - 0.0001:
+            if s["libre"] >= p["dim"] - EPS:
                 bin_ = plan[s["plan_idx"]]
                 bin_["cortes"].append({"dim": p["dim"], "hab_idx": p["hab_idx"]})
                 s["libre"]    = max(0.0, s["libre"] - p["dim"])
@@ -230,7 +244,7 @@ def elegir_mejor_plan(piezas, lens):
 # OPTIMIZADOR EXACTO (ILP por patrones de corte)
 # ═══════════════════════════════════════════════════════════════════════════
 
-_MM = 1000  # trabajamos en milímetros enteros: evita errores de redondeo tipo 5.9999
+_MM = 1000  # milímetros enteros: evita errores de redondeo tipo 5.9999
 
 
 def _mm(x):
@@ -239,9 +253,7 @@ def _mm(x):
 
 def _patrones(L_mm, dims, demanda, kerf):
     """
-    Enumera patrones MAXIMALES de corte para una placa de L_mm:
-    combinaciones de piezas donde ya no entra ninguna pieza más.
-    (Un patrón no maximal nunca conviene: cuesta lo mismo y produce menos.)
+    Enumera patrones MAXIMALES de corte para una placa de L_mm.
     Con kerf, n piezas ocupan n*d + (n-1)*kerf  ->  capacidad efectiva L+kerf.
     """
     dims = sorted(dims, reverse=True)
@@ -279,11 +291,8 @@ def costo_plan(plan, precios=None):
 
 def resolver_optimo(piezas, lens, precios=None, kerf=0.0, limite_seg=15):
     """
-    Cutting stock óptimo: enumera todas las formas "llenas" de cortar cada
-    largo de placa y el solver elige la combinación que cubre todas las
-    piezas al menor costo. Si hay precios cargados (>0) para todos los largos
-    disponibles minimiza PESOS; si no, minimiza METROS comprados.
-    Devuelve el plan (mismo formato que resolver_mixto) o None.
+    Cutting stock óptimo por patrones. Minimiza $ si hay precios para todos
+    los largos disponibles; si no, metros comprados. Devuelve plan o None.
     """
     if not HAY_PULP or not piezas or not lens:
         return None
@@ -292,23 +301,21 @@ def resolver_optimo(piezas, lens, precios=None, kerf=0.0, limite_seg=15):
     demanda = Counter(_mm(p["dim"]) for p in piezas)
     dims    = list(demanda)
     if max(dims) > _mm(max(lens)):
-        return None  # hay piezas que no entran en ninguna placa (falta perfil H)
+        return None  # hay piezas que no entran en ninguna placa
 
     usar_precio = bool(precios) and all(precios.get(L, 0) > 0 for L in lens)
 
-    # 1) Patrones por largo de placa
-    columnas = []  # (L, patrón)
+    columnas = []
     for L in lens:
         for pat in _patrones(_mm(L), dims, demanda, kerf_mm):
             columnas.append((L, pat))
 
-    # 2) Modelo: x_k = cuántas placas se cortan con el patrón k
     prob = pulp.LpProblem("corte_pvc", pulp.LpMinimize)
     x = [pulp.LpVariable(f"x{k}", lowBound=0, cat="Integer") for k in range(len(columnas))]
 
     def costo(L):
         base = precios[L] if usar_precio else L
-        return base * 1000 + 1   # +1: a igual costo, preferir menos placas
+        return base * 1000 + 1   # a igual costo, preferir menos placas
 
     prob += pulp.lpSum(costo(L) * x[k] for k, (L, _) in enumerate(columnas))
     for d in dims:
@@ -323,14 +330,12 @@ def resolver_optimo(piezas, lens, precios=None, kerf=0.0, limite_seg=15):
     if estado in ("Infeasible", "Unbounded") or any(v.value() is None for v in x):
         return None
 
-    # 3) Expandir a placas físicas
     placas = []
     for k, (L, pat) in enumerate(columnas):
         n = int(round(x[k].value() or 0))
         for _ in range(n):
             placas.append({"L": L, "cnt": dict(pat)})
 
-    # 4) Quitar piezas sobrantes (el modelo usa >=, puede producir de más)
     producido = Counter()
     for p in placas:
         producido.update(p["cnt"])
@@ -344,7 +349,6 @@ def resolver_optimo(piezas, lens, precios=None, kerf=0.0, limite_seg=15):
             exceso -= quita
     placas = [p for p in placas if sum(p["cnt"].values()) > 0]
 
-    # 5) Asignar habitación a cada corte y armar formato de la app
     cola = defaultdict(list)
     for p in sorted(piezas, key=lambda p: p["hab_idx"]):
         cola[_mm(p["dim"])].append(p)
@@ -361,7 +365,6 @@ def resolver_optimo(piezas, lens, precios=None, kerf=0.0, limite_seg=15):
         plan.append({"largo_placa": p["L"], "cortes": cortes,
                      "libre": max(0.0, (_mm(p["L"]) - usado_mm) / _MM)})
 
-    # orden prolijo: por largo, y placas iguales juntas
     plan.sort(key=lambda b: (b["largo_placa"], [-c["dim"] for c in b["cortes"]]))
     return plan
 
@@ -371,7 +374,6 @@ def mejorar_orientaciones(hab_info, lens, pw, precios=None, kerf=0.0):
     Búsqueda local de orientación con el optimizador GLOBAL.
     Para cada habitación rectangular sin sentido fijo y sin perfil H, prueba
     girar las placas y se queda con el giro si baja el costo total de la obra.
-    Modifica hab_info en el lugar y devuelve el plan final (o None).
     """
     def todas():
         return [p for h in hab_info for p in h["piezas"]]
@@ -381,26 +383,27 @@ def mejorar_orientaciones(hab_info, lens, pw, precios=None, kerf=0.0):
         return None
     mejor = costo_plan(plan, precios)
 
-    for _ in range(2):                      # 2 pasadas alcanzan en la práctica
+    for _ in range(2):
         hubo_mejora = False
         for h in hab_info:
             if h.get("tipo") == "l" or h.get("fijo") or h.get("n_h", 0) > 0:
                 continue
             if h["orient"] == "largo":
-                n_or, n_dim, n_fil = "ancho", h["ancho"], math.ceil(round(h["largo"] / pw, 6))
+                n_or, n_dim, n_fil, n_tr = "ancho", h["ancho"], n_filas(h["largo"]), h["largo"]
             else:
-                n_or, n_dim, n_fil = "largo", h["largo"], math.ceil(round(h["ancho"] / pw, 6))
-            if n_dim > max(lens) + 1e-4:
-                continue                    # girar obligaría a usar H
-            viejo = {k: h[k] for k in ("orient", "dim_pieza", "filas", "piezas", "segmentos")}
+                n_or, n_dim, n_fil, n_tr = "largo", h["largo"], n_filas(h["ancho"]), h["ancho"]
+            if n_dim > max(lens) + EPS:
+                continue
+            viejo = {k: h[k] for k in ("orient", "dim_pieza", "filas", "piezas",
+                                        "segmentos", "transv")}
             h.update(orient=n_or, dim_pieza=n_dim, filas=n_fil, segmentos=[n_dim],
-                     piezas=[{"dim": n_dim, "hab_idx": h["idx"]}] * n_fil)
+                     transv=n_tr, piezas=[{"dim": n_dim, "hab_idx": h["idx"]}] * n_fil)
             cand = resolver_optimo(todas(), lens, precios, kerf)
             c = costo_plan(cand, precios) if cand else float("inf")
             if c < mejor - 1e-9:
                 plan, mejor, hubo_mejora = cand, c, True
             else:
-                h.update(viejo)             # deshacer el giro
+                h.update(viejo)
         if not hubo_mejora:
             break
     return plan
@@ -409,79 +412,91 @@ def mejorar_orientaciones(hab_info, lens, pw, precios=None, kerf=0.0):
 # AMBIENTES EN L
 # ═══════════════════════════════════════════════════════════════════════════
 
-def calcular_piezas_l(largo_total, ancho_total, largo_recorte, ancho_recorte, idx, lens,
-                      otras_piezas=None, esquina="inf_izq"):
+def _grupos_l(lt, at, lr, ar, orient):
     """
-    Calcula piezas para ambiente en L según la esquina del recorte.
-    La lógica de filas y dimensiones de pieza varía según dónde esté el recorte.
+    Grupos de tiras (dimensión, cantidad) de una L. El recorte (lr × ar) es el
+    pedazo que FALTA, en cualquier esquina: la esquina no cambia las cantidades.
 
-    ORIENT A (placas en dirección ANCHO, filas cuentan en LARGO):
-      piezas largas = ancho_total, piezas cortas = ancho_tramo
-      inf_*: filas_l=ceil(largo_tramo/PW),   filas_c=floor(largo_recorte/PW)
-      sup_*: filas_l=ceil(largo_recorte/PW), filas_c=floor(largo_tramo/PW)
-
-    ORIENT B (placas en dirección LARGO, filas cuentan en ANCHO):
-      piezas largas = largo_total
-      piezas cortas = el brazo que EXISTE en la sección parcial:
-        inf_*: largo_tramo   (el brazo existente es el tramo)
-        sup_*: largo_recorte (el brazo existente es el recorte)
-      filas_l = ceil(ancho_tramo/PW), filas_c = floor(ancho_recorte/PW)
+    orient "ancho": placas corren en dirección del ANCHO, las filas avanzan por el largo.
+        - tiras que caen sobre el recorte: ancho_total - ancho_recorte
+        - el resto: ancho_total
+    orient "largo": placas corren en dirección del LARGO, las filas avanzan por el ancho.
+        - tiras que caen sobre el recorte: largo_total - largo_recorte
+        - el resto: largo_total
+    La fila que cruza el borde del recorte se cuenta como larga (queda cubierta).
     """
-    largo_tramo = round(largo_total - largo_recorte, 4)
-    ancho_tramo = round(ancho_total  - ancho_recorte, 4)
-    otras       = otras_piezas or []
-    es_sup      = esquina.startswith("sup")
+    if orient == "ancho":
+        total  = n_filas(lt)
+        cortas = min(math.floor(round(lr / PW, 6)), total)
+        return [(round(at, 4), total - cortas), (round(at - ar, 4), cortas)]
+    total  = n_filas(at)
+    cortas = min(math.floor(round(ar / PW, 6)), total)
+    return [(round(lt, 4), total - cortas), (round(lt - lr, 4), cortas)]
 
-    # Orientación A
-    if not es_sup:
-        filas_A_l = math.ceil(largo_tramo   / PW)
-        filas_A_c = math.floor(largo_recorte / PW)
-    else:
-        filas_A_l = math.ceil(largo_recorte / PW)
-        filas_A_c = math.floor(largo_tramo  / PW)
-    piezas_A = (
-        [{"dim": ancho_total,  "hab_idx": idx}] * filas_A_l +
-        [{"dim": ancho_tramo,  "hab_idx": idx}] * filas_A_c
-    )
 
-    # Orientación B
-    pieza_B_c = largo_tramo if not es_sup else largo_recorte
-    filas_B_l = math.ceil(ancho_tramo   / PW)
-    filas_B_c = math.floor(ancho_recorte / PW)
-    piezas_B  = (
-        [{"dim": largo_total, "hab_idx": idx}] * filas_B_l +
-        [{"dim": pieza_B_c,   "hab_idx": idx}] * filas_B_c
-    )
+def _expandir_grupos(grupos, idx, lens, usar_h):
+    """Convierte grupos en piezas, partiendo con H las tiras que no entran."""
+    piezas, info = [], []
+    for dim, n in grupos:
+        if n <= 0 or dim <= 0:
+            continue
+        if usar_h and necesita_h(dim, lens):
+            segs, k = dividir_con_h(dim, lens)
+        else:
+            segs, k = [dim], 0
+        for _ in range(n):
+            piezas += [{"dim": s, "hab_idx": idx} for s in segs]
+        info.append({"dim": dim, "filas": n, "segs": segs, "lineas_h": k,
+                     # la línea de unión cubre solo las filas de este grupo
+                     "varillas_h": varillas_h(k, n * PW)})
+    return piezas, info
 
-    max_L    = max(lens) if lens else 0
-    viable_A = all(p["dim"] <= max_L + 0.0001 for p in piezas_A)
-    viable_B = all(p["dim"] <= max_L + 0.0001 for p in piezas_B)
 
-    def ret_A(): return "ancho", piezas_A, filas_A_l, filas_A_c, ancho_total, ancho_tramo
-    def ret_B(): return "largo", piezas_B, filas_B_l, filas_B_c, largo_total, pieza_B_c
+def calcular_piezas_l(lt, at, lr, ar, idx, lens, otras_piezas=None,
+                      usar_h=True, precios=None):
+    """
+    Evalúa las dos orientaciones de una L y elige:
+      1. Si una entra sin H y la otra no -> la que no necesita H
+      2. Si ambas (o ninguna) necesitan H -> la de menor costo en contexto global
+    Retorna dict con orient, grupos, piezas, info, n_h, varillas_h.
+    """
+    otras  = otras_piezas or []
+    max_L  = max(lens)
+    opciones = []
+    for orient in ("ancho", "largo"):
+        grupos         = _grupos_l(lt, at, lr, ar, orient)
+        piezas, info   = _expandir_grupos(grupos, idx, lens, usar_h)
+        opciones.append({
+            "orient":     orient,
+            "grupos":     grupos,
+            "piezas":     piezas,
+            "info":       info,
+            "necesita_h": any(n > 0 and necesita_h(d, lens) for d, n in grupos),
+            "entra":      all(p["dim"] <= max_L + EPS for p in piezas),
+            "n_h":        sum(g["lineas_h"] for g in info),
+            "varillas_h": sum(g["varillas_h"] for g in info),
+        })
 
-    if not viable_A and not viable_B:
-        pA = elegir_mejor_plan(piezas_A, lens)
-        pB = elegir_mejor_plan(piezas_B, lens)
-        return ret_A() if (len(pA) if pA else float("inf")) <= (len(pB) if pB else float("inf")) else ret_B()
-    if not viable_A: return ret_B()
-    if not viable_B: return ret_A()
+    entran = [o for o in opciones if o["entra"]]
+    if not entran:
+        return opciones[0]   # solo pasa sin H; el control global muestra el error
 
-    # Ambas viables: evaluar en contexto global (óptimo si hay solver, si no heurística)
-    plan_A = resolver_optimo(otras + piezas_A, lens) or resolver_mixto(otras + piezas_A, lens)
-    plan_B = resolver_optimo(otras + piezas_B, lens) or resolver_mixto(otras + piezas_B, lens)
-    c_A    = costo_plan(plan_A)
-    c_B    = costo_plan(plan_B)
-    return ret_A() if c_A <= c_B else ret_B()
+    sin_h     = [o for o in entran if not o["necesita_h"]]
+    candidatas = sin_h or entran
+    if len(candidatas) == 1:
+        return candidatas[0]
+
+    def evaluar(o):
+        plan = (resolver_optimo(otras + o["piezas"], lens, precios)
+                or resolver_mixto(otras + o["piezas"], lens))
+        return (costo_plan(plan, precios), o["varillas_h"])
+
+    return min(candidatas, key=evaluar)
 
 
 def diagrama_l_svg(lt, at, lr, ar, color, esquina="inf_izq"):
     """
-    SVG que muestra la forma L con medidas.
-    Siempre muestra:
-      - largo_total (lt) arriba, de punta a punta
-      - ancho_total (at) al costado, de punta a punta
-      - largo_recorte (lr) y ancho_recorte (ar) sobre el recorte
+    SVG de la L con medidas. El recorte (lr × ar) siempre está en la esquina elegida.
     """
     scale = 110 / max(lt, at)
     pad   = 36
@@ -498,10 +513,10 @@ def diagrama_l_svg(lt, at, lr, ar, color, esquina="inf_izq"):
         pts = (f"{x0},{y0} {x0+wt},{y0} {x0+wt},{y0+ht} "
                f"{x0+wlr},{y0+ht} {x0+wlr},{y0+ht-har} {x0},{y0+ht-har}")
         dim_lines = (
-            _cota_h(x0, y0-8, x0+wt, y0-8, lt, c, "above") +          # largo total arriba
-            _cota_v(x0+wt+4, y0, x0+wt+4, y0+ht, at, c, "right") +    # ancho total derecha
-            _cota_h(x0, y0+ht+6, x0+wlr, y0+ht+6, lr, c, "below") +  # largo recorte abajo
-            _cota_v(x0+wlr+4, y0+ht-har, x0+wlr+4, y0+ht, ar, c, "right")  # ancho recorte
+            _cota_h(x0, y0-8, x0+wt, y0-8, lt, c, "above") +
+            _cota_v(x0+wt+4, y0, x0+wt+4, y0+ht, at, c, "right") +
+            _cota_h(x0, y0+ht+6, x0+wlr, y0+ht+6, lr, c, "below") +
+            _cota_v(x0+wlr+4, y0+ht-har, x0+wlr+4, y0+ht, ar, c, "right")
         )
     elif esquina == "inf_der":
         pts = (f"{x0},{y0} {x0+wt},{y0} {x0+wt},{y0+ht-har} "
@@ -513,22 +528,22 @@ def diagrama_l_svg(lt, at, lr, ar, color, esquina="inf_izq"):
             _cota_v(x0+wt-wlr-4, y0+ht-har, x0+wt-wlr-4, y0+ht, ar, c, "left")
         )
     elif esquina == "sup_izq":
-        pts = (f"{x0},{y0} {x0+wlr},{y0} {x0+wlr},{y0+har} "
-               f"{x0+wt},{y0+har} {x0+wt},{y0+ht} {x0},{y0+ht}")
+        pts = (f"{x0+wlr},{y0} {x0+wt},{y0} {x0+wt},{y0+ht} "
+               f"{x0},{y0+ht} {x0},{y0+har} {x0+wlr},{y0+har}")
         dim_lines = (
-            _cota_h(x0, y0-8, x0+wt, y0-8, lt, c, "above") +
+            _cota_h(x0, y0+ht+6, x0+wt, y0+ht+6, lt, c, "below") +
             _cota_v(x0+wt+4, y0, x0+wt+4, y0+ht, at, c, "right") +
             _cota_h(x0, y0-8, x0+wlr, y0-8, lr, c, "above") +
-            _cota_v(x0+wlr+4, y0, x0+wlr+4, y0+har, ar, c, "right")
+            _cota_v(x0-4, y0, x0-4, y0+har, ar, c, "left")
         )
     else:  # sup_der
-        pts = (f"{x0},{y0+har} {x0+wt-wlr},{y0+har} {x0+wt-wlr},{y0} "
-               f"{x0+wt},{y0} {x0+wt},{y0+ht} {x0},{y0+ht}")
+        pts = (f"{x0},{y0} {x0+wt-wlr},{y0} {x0+wt-wlr},{y0+har} "
+               f"{x0+wt},{y0+har} {x0+wt},{y0+ht} {x0},{y0+ht}")
         dim_lines = (
-            _cota_h(x0, y0-8, x0+wt, y0-8, lt, c, "above") +
-            _cota_v(x0+wt+4, y0, x0+wt+4, y0+ht, at, c, "right") +
+            _cota_h(x0, y0+ht+6, x0+wt, y0+ht+6, lt, c, "below") +
+            _cota_v(x0-4, y0, x0-4, y0+ht, at, c, "left") +
             _cota_h(x0+wt-wlr, y0-8, x0+wt, y0-8, lr, c, "above") +
-            _cota_v(x0+wt-wlr-4, y0, x0+wt-wlr-4, y0+har, ar, c, "left")
+            _cota_v(x0+wt+4, y0, x0+wt+4, y0+har, ar, c, "right")
         )
 
     return (
@@ -562,18 +577,18 @@ def _cota_v(x1, y1, x2, y2, val, color, pos):
 
 def orientacion_optima(r, idx, lens_efectivos):
     """
-    Elige orientación inicial minimizando metros de placa (evaluación por habitación).
-    La orientación final se ajusta después con mejorar_orientaciones() en contexto global.
-    Regla de prioridad:
-      1. Si una orientación entra sin H y la otra no -> elegir la que no necesita H
-      2. Si ambas entran sin H -> elegir la de menor costo
+    Elige orientación inicial minimizando costo (evaluación por habitación).
+    Retorna: orient, dim_pieza, filas, piezas, segmentos, uniones_por_tira
+    (uniones_por_tira = cantidad de LÍNEAS de perfil H en la habitación).
+      1. Si una orientación entra sin H y la otra no -> la que no necesita H
+      2. Si ambas entran sin H -> la de menor costo
       3. Si ninguna entra sin H -> usar H en la que genere menos costo
     """
-    filas_largo = math.ceil(r["ancho"] / PW)
-    filas_ancho  = math.ceil(r["largo"] / PW)
+    filas_largo = n_filas(r["ancho"])
+    filas_ancho = n_filas(r["largo"])
 
     largo_necesita_h = necesita_h(r["largo"], lens_efectivos)
-    ancho_necesita_h  = necesita_h(r["ancho"],  lens_efectivos)
+    ancho_necesita_h = necesita_h(r["ancho"], lens_efectivos)
 
     def piezas_simples(dim, filas, hab_idx):
         return [{"dim": dim, "hab_idx": hab_idx}] * filas
@@ -589,79 +604,59 @@ def orientacion_optima(r, idx, lens_efectivos):
         else:
             segs, n_h = [r["largo"]], 0
             piezas = piezas_simples(r["largo"], filas_largo, idx)
-        return "largo", r["largo"], filas_largo, piezas, segs, n_h * filas_largo
+        return "largo", r["largo"], filas_largo, piezas, segs, n_h
 
-    # Caso 1: una entra sin H y la otra no -> preferir sin H
     if not largo_necesita_h and ancho_necesita_h:
-        segs = [r["largo"]]
-        return "largo", r["largo"], filas_largo, piezas_simples(r["largo"], filas_largo, idx), segs, 0
+        return "largo", r["largo"], filas_largo, piezas_simples(r["largo"], filas_largo, idx), [r["largo"]], 0
 
     if largo_necesita_h and not ancho_necesita_h:
-        segs = [r["ancho"]]
-        return "ancho", r["ancho"], filas_ancho, piezas_simples(r["ancho"], filas_ancho, idx), segs, 0
+        return "ancho", r["ancho"], filas_ancho, piezas_simples(r["ancho"], filas_ancho, idx), [r["ancho"]], 0
 
-    # Caso 2: ambas entran sin H -> elegir la de menor costo (metros, no cantidad de placas)
     if not largo_necesita_h and not ancho_necesita_h:
         p_largo = piezas_simples(r["largo"], filas_largo, idx)
-        p_ancho  = piezas_simples(r["ancho"],  filas_ancho,  idx)
+        p_ancho = piezas_simples(r["ancho"], filas_ancho, idx)
         c_l = costo_plan(resolver_optimo(p_largo, lens_efectivos) or elegir_mejor_plan(p_largo, lens_efectivos))
         c_a = costo_plan(resolver_optimo(p_ancho, lens_efectivos) or elegir_mejor_plan(p_ancho, lens_efectivos))
         if c_l <= c_a:
             return "largo", r["largo"], filas_largo, p_largo, [r["largo"]], 0
-        else:
-            return "ancho", r["ancho"], filas_ancho, p_ancho, [r["ancho"]], 0
+        return "ancho", r["ancho"], filas_ancho, p_ancho, [r["ancho"]], 0
 
-    # Caso 3: ambas necesitan H -> evaluar con segmentos y elegir menor costo
     p_largo = piezas_con_h(r["largo"], filas_largo, idx, lens_efectivos)
-    p_ancho  = piezas_con_h(r["ancho"],  filas_ancho,  idx, lens_efectivos)
+    p_ancho = piezas_con_h(r["ancho"], filas_ancho, idx, lens_efectivos)
     c_l = costo_plan(resolver_optimo(p_largo, lens_efectivos) or elegir_mejor_plan(p_largo, lens_efectivos))
     c_a = costo_plan(resolver_optimo(p_ancho, lens_efectivos) or elegir_mejor_plan(p_ancho, lens_efectivos))
     if c_l <= c_a:
         segs, n_h = dividir_con_h(r["largo"], lens_efectivos)
-        return "largo", r["largo"], filas_largo, p_largo, segs, n_h * filas_largo
-    else:
-        segs, n_h = dividir_con_h(r["ancho"], lens_efectivos)
-        return "ancho", r["ancho"], filas_ancho, p_ancho, segs, n_h * filas_ancho
+        return "largo", r["largo"], filas_largo, p_largo, segs, n_h
+    segs, n_h = dividir_con_h(r["ancho"], lens_efectivos)
+    return "ancho", r["ancho"], filas_ancho, p_ancho, segs, n_h
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ESTRUCTURA
 # ═══════════════════════════════════════════════════════════════════════════
 
 def hab_largo(h):
-    """Retorna el largo principal de la habitación (largo_total para L, largo para rect)."""
     return h.get("largo_total", h.get("largo", 0))
 
 def hab_ancho(h):
-    """Retorna el ancho principal de la habitación."""
     return h.get("ancho_total", h.get("ancho", 0))
 
 def hab_area(h):
-    """Retorna el área real de la habitación."""
+    """Área real. En L: rectángulo total menos el recorte (lo que falta)."""
     if h.get("tipo") == "l":
-        lt, at = h["largo_total"], h["ancho_total"]
-        # largo_reducido y ancho_reducido son el RECORTE (el pedazo que falta)
-        lr_rec = h["largo_reducido"]
-        ar_rec = h["ancho_reducido"]
-        return round(lt * at - lr_rec * ar_rec, 4)
+        return round(h["largo_total"] * h["ancho_total"]
+                     - h["largo_reducido"] * h["ancho_reducido"], 4)
     return round(h.get("largo", 0) * h.get("ancho", 0), 4)
 
 def hab_perim(h):
-    """Retorna el perímetro de la habitación."""
+    """Perímetro. En una L ortogonal es igual al del rectángulo que la contiene."""
     if h.get("tipo") == "l":
-        lt, at  = h["largo_total"],    h["ancho_total"]
-        lr_rec  = h["largo_reducido"]  # largo del recorte
-        ar_rec  = h["ancho_reducido"]  # ancho del recorte
-        # Perímetro de la L: suma de los 6 lados
-        # lado1=lt, lado2=at, lado3=lr_rec, lado4=ar_rec, lado5=(lt-lr_rec), lado6=(at-ar_rec)
-        return round(lt + at + lr_rec + ar_rec + (lt - lr_rec) + (at - ar_rec), 4)
+        return round(2 * (h["largo_total"] + h["ancho_total"]), 4)
     return round(2 * (h.get("largo", 0) + h.get("ancho", 0)), 4)
 
 def calcular_estructura(largo, ancho, altura, orientacion,
                         area_real=None, perim_real=None):
-    """
-    Calcula estructura. Para habitaciones en L, pasar area_real y perim_real
-    para que T1, T2, molduras y tarugos sean correctos.
-    """
+    """Calcula estructura. Para L, pasar area_real y perim_real."""
     if orientacion == "largo":
         dim_paralela, dim_transversal = largo, ancho
     else:
@@ -700,6 +695,16 @@ def calcular_estructura(largo, ancho, altura, orientacion,
         "total_t2": total_t2,
     }
 
+
+def texto_cortes_h(h):
+    """Texto legible de cómo se parten las tiras con H en una habitación."""
+    if h.get("tipo") == "l":
+        partes = [f"{g['dim']}m → " + " + ".join(f"{s}m" for s in g["segs"])
+                  + f" ({g['filas']} filas)"
+                  for g in h.get("grupos_h", []) if g["lineas_h"] > 0]
+        return " | ".join(partes)
+    return " + ".join(f"{s}m" for s in h["segmentos"])
+
 # ═══════════════════════════════════════════════════════════════════════════
 # PDF
 # ═══════════════════════════════════════════════════════════════════════════
@@ -735,7 +740,6 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     W     = A4[0] - 3.6*cm
     fecha = date.today().strftime("%d/%m/%Y")
 
-    # Encabezado
     logo_img = logo_imagen()
     if logo_img:
         from reportlab.platypus.flowables import Image as FImage
@@ -752,10 +756,10 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
         story.append(Paragraph(f"<b>Obra / Descripción:</b> {descripcion.strip()}", s_body))
         story.append(Spacer(1,3))
 
-    # Resumen
     story.append(Paragraph("RESUMEN DE MATERIALES", s_sub))
     desc_mix = "  |  ".join(f"{conteo[l]} × {l}m" for l in [4,5,6] if conteo.get(l,0)>0)
-    h_txt = f"{tot_h_perfiles} H necesarios ({tot_h_varillas} varillas 4m)" if tot_h_perfiles > 0 else "No se requieren"
+    h_txt = (f"{tot_h_varillas} varillas 4m ({tot_h_perfiles} uniones)"
+             if tot_h_varillas > 0 else "No se requieren")
 
     res = [
         ["Área total","Placas PVC","m² comprados","m² desperdicio","Desperdicio %"],
@@ -789,21 +793,19 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     ]))
     story += [t_res, Spacer(1,5)]
 
-    # Detalle estructura
     story.append(Paragraph("DETALLE DE ESTRUCTURA POR HABITACIÓN", s_sub))
     eh = ["Habitación","Dim.","Alt.","Soleras","Montantes","Molduras","Tarugos","Perf. H","T1","T2"]
     erows = [eh]
-    for h in habs:
-        e  = estructuras[h["nombre"]]
-        hi = next(x for x in hab_info if x["nombre"]==h["nombre"])
-        erows.append([h["nombre"], f"{hab_largo(h)}×{hab_ancho(h)}m",
-                      f"{h.get('altura',0.30):.2f}m",
+    for hi in hab_info:
+        e = estructuras[hi["idx"]]
+        erows.append([hi["nombre"], f"{hab_largo(hi)}×{hab_ancho(hi)}m",
+                      f"{hi.get('altura',0.30):.2f}m",
                       str(e["total_soleras"]), str(e["total_montantes"]),
                       str(e["total_molduras"]), str(e["total_tarugos_n8"]),
-                      str(hi["n_h"]) if hi["n_h"]>0 else "—",
+                      f"{hi['varillas_h']} var." if hi["n_h"]>0 else "—",
                       str(e["total_t1"]), str(e["total_t2"])])
     ew = [W*0.15,W*0.10,W*0.07,W*0.08,W*0.09,W*0.09,W*0.09,W*0.09,W*0.08,W*0.08]
-    t_est = Table(erows, colWidths=[sum(ew[:i+1])-sum(ew[:i]) for i in range(len(ew))], repeatRows=1)
+    t_est = Table(erows, colWidths=ew, repeatRows=1)
     t_est.setStyle(TableStyle([
         ("BACKGROUND",(0,0),(-1,0),NAVY), ("TEXTCOLOR",(0,0),(-1,0),colors.white),
         ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"), ("FONTSIZE",(0,0),(-1,-1),7),
@@ -814,20 +816,16 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     ]))
     story += [t_est, Spacer(1,5)]
 
-    # Detalle placas
     story.append(Paragraph("DETALLE DE PLACAS PVC POR HABITACIÓN", s_sub))
-    ph = ["Habitación","Área (m²)","Dirección","Dim. placa","Filas","Perím.","Perf. H","Varillas H (4m)"]
+    ph = ["Habitación","Área (m²)","Dirección","Dim. placa","Filas","Perím.","Uniones H","Varillas H (4m)"]
     prows = [ph]
     for h in hab_info:
-        area  = hab_area(h)
-        perim = hab_perim(h)
-        dir_  = ("→ largo" if h["orient"]=="largo" else "↓ ancho")+(" (fijo)" if h["fijo"] else "")
-        varillas_h = (math.ceil(dim_transversal_h(h) / LARGO_H) * h["n_h"]) if h["n_h"]>0 else 0
-        prows.append([h["nombre"], f"{area:.2f}", dir_,
-                      f"{h['dim_pieza']}m", str(h["filas"]), f"{perim:.1f}",
+        dir_ = ("→ largo" if h["orient"]=="largo" else "↓ ancho")+(" (fijo)" if h.get("fijo") else "")
+        prows.append([h["nombre"], f"{hab_area(h):.2f}", dir_,
+                      f"{h['dim_pieza']}m", str(h["filas"]), f"{hab_perim(h):.1f}",
                       str(h["n_h"]) if h["n_h"]>0 else "—",
-                      str(varillas_h) if h["n_h"]>0 else "—"])
-    pw2 = [W*0.18,W*0.10,W*0.16,W*0.10,W*0.08,W*0.10,W*0.10,W*0.13]
+                      str(h["varillas_h"]) if h["n_h"]>0 else "—"])
+    pw2 = [W*0.18,W*0.10,W*0.16,W*0.10,W*0.08,W*0.10,W*0.12,W*0.16]
     t_plac = Table(prows, colWidths=pw2, repeatRows=1)
     t_plac.setStyle(TableStyle([
         ("BACKGROUND",(0,0),(-1,0),NAVY), ("TEXTCOLOR",(0,0),(-1,0),colors.white),
@@ -839,21 +837,20 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     ]))
     story += [t_plac, Spacer(1,5)]
 
-    # Plan de corte
     story.append(Paragraph("PLAN DE CORTE — INSTRUCCIONES PASO A PASO", s_sub))
-    story.append(Paragraph("Cada fila es una placa física. ⚡ = requiere perfil H de unión.", s_body))
+    story.append(Paragraph("Cada fila es una placa física.", s_body))
     story.append(Spacer(1,3))
+
+    s_cell   = ParagraphStyle("cell",  fontSize=7.5, textColor=DARK_GRAY,
+                               fontName="Helvetica",      leading=10)
+    s_cell_h = ParagraphStyle("cellh", fontSize=7.5, textColor=colors.white,
+                               fontName="Helvetica-Bold", leading=10)
 
     for L in [4,5,6]:
         bins_L = [b for b in plan if b["largo_placa"]==L]
         if not bins_L:
             continue
         story.append(Paragraph(f"Placas de {L} metros — {len(bins_L)} unidades", s_sub))
-
-        s_cell   = ParagraphStyle("cell",  fontSize=7.5, textColor=DARK_GRAY,
-                                   fontName="Helvetica",      leading=10)
-        s_cell_h = ParagraphStyle("cellh", fontSize=7.5, textColor=colors.white,
-                                   fontName="Helvetica-Bold", leading=10)
 
         crows = [[
             Paragraph("#", s_cell_h),
@@ -892,7 +889,6 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
         ]))
         story += [t_c, Spacer(1,4)]
 
-    # Pie
     story += [Spacer(1,10), HRFlowable(width="100%", thickness=0.8, color=MID_GRAY, spaceAfter=6)]
     t_firma = Table([[
         Paragraph(f"Este plan de corte fue generado el {fecha}. "
@@ -955,7 +951,6 @@ if "habitaciones" not in st.session_state:
 
 def _next_hid():
     if "hid_counter" not in st.session_state:
-        # asignar hids a habitaciones existentes que no lo tengan
         for j, h in enumerate(st.session_state.habitaciones):
             if "hid" not in h:
                 h["hid"] = j + 1
@@ -964,19 +959,25 @@ def _next_hid():
     st.session_state.hid_counter += 1
     return hid
 
+def _nombre_libre(prefijo):
+    """Primer nombre 'prefijo N' que no esté usado (evita nombres repetidos)."""
+    usados = {h["nombre"] for h in st.session_state.habitaciones}
+    n = 1
+    while f"{prefijo} {n}" in usados:
+        n += 1
+    return f"{prefijo} {n}"
+
 def agregar():
-    n   = len(st.session_state.habitaciones)+1
     hid = _next_hid()
     st.session_state.habitaciones.append(
-        {"hid": hid, "nombre": f"Habitación {n}", "tipo": "rect",
+        {"hid": hid, "nombre": _nombre_libre("Habitación"), "tipo": "rect",
          "largo": 0.1, "ancho": 0.1, "altura": 0.30,
          "fijo": False, "forzar_h": False})
 
 def agregar_l():
-    n   = len(st.session_state.habitaciones)+1
     hid = _next_hid()
     st.session_state.habitaciones.append(
-        {"hid": hid, "nombre": f"Ambiente L {n}", "tipo": "l",
+        {"hid": hid, "nombre": _nombre_libre("Ambiente L"), "tipo": "l",
          "largo_total": 4.0, "ancho_total": 1.5,
          "largo_reducido": 1.5, "ancho_reducido": 0.5,
          "altura": 0.30, "forzar_h": False, "esquina": "inf_izq"})
@@ -986,7 +987,6 @@ def eliminar(hid):
         h for h in st.session_state.habitaciones if h.get("hid") != hid
     ]
 
-# Migración: garantizar hid único en TODAS las habitaciones antes del loop
 if "hid_counter" not in st.session_state:
     st.session_state.hid_counter = 1
 _max_hid = 0
@@ -995,7 +995,6 @@ for _h in st.session_state.habitaciones:
         _h["hid"] = st.session_state.hid_counter
         st.session_state.hid_counter += 1
     _max_hid = max(_max_hid, _h["hid"])
-# Asegurar que el counter siempre esté por encima del mayor hid existente
 st.session_state.hid_counter = max(st.session_state.hid_counter, _max_hid + 1)
 
 for i, hab in enumerate(st.session_state.habitaciones):
@@ -1012,7 +1011,6 @@ for i, hab in enumerate(st.session_state.habitaciones):
     with col_form:
         with st.container(border=True):
             if es_l:
-                # ── Habitación en L ──────────────────────────────────────
                 r1c1, r1c2, r1c3, r1c4, r1c5, r1c6, r1c7 = st.columns([2.2,1.1,1.1,1.1,1.1,1.2,0.5])
                 with r1c1:
                     hab["nombre"] = st.text_input("Nombre", value=hab["nombre"],
@@ -1038,7 +1036,6 @@ for i, hab in enumerate(st.session_state.habitaciones):
                                  disabled=len(st.session_state.habitaciones)<=1):
                         eliminar(hid)
                         st.rerun()
-                # Selector de esquina + diagrama SVG
                 col_esq, col_svg = st.columns([1, 2])
                 with col_esq:
                     hab["esquina"] = st.radio(
@@ -1064,7 +1061,6 @@ for i, hab in enumerate(st.session_state.habitaciones):
                     except Exception:
                         pass
             else:
-                # ── Habitación rectangular normal ─────────────────────────
                 c1,c2,c3,c4,c5,c6,c7 = st.columns([2.2,1.2,1.2,1.2,1.6,1.4,0.5])
                 with c1:
                     hab["nombre"] = st.text_input("Nombre", value=hab["nombre"],
@@ -1109,103 +1105,97 @@ if not lens:
 
 habs = st.session_state.habitaciones
 
-# Paso 1: determinar orientación de cada habitación (sin H opcional aún)
+# Validación de ambientes en L
+_l_invalidas = [h["nombre"] for h in habs if h.get("tipo") == "l" and (
+    h["largo_reducido"] >= h["largo_total"] - EPS or
+    h["ancho_reducido"] >= h["ancho_total"] - EPS)]
+if _l_invalidas:
+    st.error("El recorte tiene que ser más chico que el total en: "
+             + ", ".join(_l_invalidas))
+    st.stop()
+
+# Paso 1: orientación y piezas de cada habitación
 hab_info = []
 for i, h in enumerate(habs):
     es_l = h.get("tipo") == "l"
 
     if es_l:
-        # ── Ambiente en L ────────────────────────────────────────────────
-        lt  = h["largo_total"]
-        at  = h["ancho_total"]
-        lr_rec = h["largo_reducido"]  # recorte
-        ar_rec = h["ancho_reducido"]  # recorte
-        # Pasar piezas ya calculadas de otras habitaciones como contexto global
+        lt, at = h["largo_total"], h["ancho_total"]
         otras_piezas_ctx = [p for h2 in hab_info for p in h2["piezas"]]
-        orient, piezas, filas_l, filas_c, dim_larga, dim_corta = calcular_piezas_l(
-            lt, at, lr_rec, ar_rec, i, lens,
-            otras_piezas=otras_piezas_ctx,
-            esquina=h.get("esquina", "inf_izq"))
-        filas      = filas_l + filas_c
-        dim_pieza  = dim_larga   # dim principal para referencia
-        segmentos  = [dim_larga]
-        area_l     = hab_area(h)   # área real de la L (total - recorte)
+        sel = calcular_piezas_l(
+            lt, at, h["largo_reducido"], h["ancho_reducido"], i, lens,
+            otras_piezas=otras_piezas_ctx, usar_h=usar_h, precios=precios)
+        (dim_larga, filas_l), (dim_corta, filas_c) = sel["grupos"]
+        info_larga = next((g for g in sel["info"] if g["dim"] == dim_larga), None)
         hab_info.append({
-            **h, "idx": i, "orient": orient,
-            "dim_pieza": dim_pieza, "dim_pieza_orig": dim_pieza,
-            "filas": filas, "filas_l": filas_l, "filas_c": filas_c,
+            **h, "idx": i, "orient": sel["orient"],
+            "dim_pieza": dim_larga, "dim_pieza_orig": dim_larga,
+            "filas": filas_l + filas_c, "filas_l": filas_l, "filas_c": filas_c,
             "dim_larga": dim_larga, "dim_corta": dim_corta,
-            "piezas": piezas, "segmentos": segmentos,
-            "n_h": 0, "varillas_h": 0,
-            "auto_h": False, "h_opcional_aplicado": False,
-            "area_real": round(area_l, 4),
-            "largo": lt, "ancho": at,  # para compatibilidad con estructura
+            "piezas": sel["piezas"],
+            "segmentos": info_larga["segs"] if info_larga else [dim_larga],
+            "grupos_h": sel["info"],
+            "n_h": sel["n_h"], "varillas_h": sel["varillas_h"],
+            "auto_h": sel["n_h"] > 0, "h_opcional_aplicado": False,
+            "area_real": hab_area(h),
+            "largo": lt, "ancho": at,
+            "transv": at if sel["orient"] == "largo" else lt,
             "fijo": False, "forzar_h": False,
         })
     else:
-        # ── Habitación rectangular normal ─────────────────────────────────
         orient, dim_pieza, filas, piezas, segmentos, n_h = orientacion_optima(h, i, lens)
 
         if not usar_h:
-            if necesita_h(dim_pieza, lens):
-                st.warning(f"⚠️ **{h['nombre']}**: {dim_pieza}m supera el largo máximo "
-                           f"disponible ({max(lens)}m). Activá el perfil H en la barra lateral.")
             n_h       = 0
             segmentos = [dim_pieza]
             piezas    = [{"dim": dim_pieza, "hab_idx": i}] * filas
 
+        transv = h["ancho"] if orient == "largo" else h["largo"]
         hab_info.append({
             **h, "idx": i, "orient": orient,
             "dim_pieza": dim_pieza, "dim_pieza_orig": dim_pieza,
             "filas": filas, "piezas": piezas,
             "segmentos": segmentos, "n_h": n_h,
-            "varillas_h": n_h,
+            "varillas_h": varillas_h(n_h, transv),
+            "transv": transv,
             "auto_h": necesita_h(dim_pieza, lens) and usar_h,
             "h_opcional_aplicado": False,
             "area_real": hab_area(h),
         })
 
-# Paso 2: para habitaciones con "Usar H" opcional (no obligatorio),
-# buscar el corte que maximiza el ahorro de placas en el contexto global.
-# Se evalúan en orden de mayor a menor dimensión (las más grandes tienen más impacto).
+# Control: con H desactivado, no puede haber piezas más largas que la placa
+_max_L  = max(lens)
+_largas = sorted({(hi["nombre"], p["dim"]) for hi in hab_info for p in hi["piezas"]
+                  if p["dim"] > _max_L + EPS})
+if _largas:
+    st.error(
+        f"Hay tiras más largas que la placa máxima disponible ({_max_L} m): "
+        + ", ".join(f"{n} ({d} m)" for n, d in _largas)
+        + ". Activá **Usar perfil H** o habilitá placas más largas.")
+    st.stop()
+
+# Paso 2: H opcional en habitaciones rectangulares
 if usar_h:
-    candidatas = [
-        h for h in hab_info
-        if h.get("forzar_h", False) and h["n_h"] == 0  # H opcional activado, no obligatorio
-    ]
-    # Ordenar por dimensión descendente para evaluar primero las de mayor impacto
+    candidatas = [h for h in hab_info if h.get("forzar_h", False) and h["n_h"] == 0]
     candidatas.sort(key=lambda h: h["dim_pieza"], reverse=True)
 
     for hc in candidatas:
-        # Piezas de todas las otras habitaciones (ya resueltas)
-        otras_piezas = [
-            p for h in hab_info
-            if h["idx"] != hc["idx"]
-            for p in h["piezas"]
-        ]
+        otras_piezas = [p for h in hab_info if h["idx"] != hc["idx"] for p in h["piezas"]]
         resultado = mejor_corte_h_opcional(
-            hc["dim_pieza"], hc["filas"], hc["idx"], otras_piezas, lens
-        )
+            hc["dim_pieza"], hc["filas"], hc["idx"], otras_piezas, lens)
         if resultado:
             seg1, seg2, _ = resultado
             nuevas_piezas = []
             for _ in range(hc["filas"]):
                 nuevas_piezas.append({"dim": seg1, "hab_idx": hc["idx"]})
                 nuevas_piezas.append({"dim": seg2, "hab_idx": hc["idx"]})
-            # Actualizar esta habitación en hab_info
-            for h in hab_info:
-                if h["idx"] == hc["idx"]:
-                    h["piezas"]               = nuevas_piezas
-                    h["segmentos"]            = [seg1, seg2]
-                    h["n_h"]                  = hc["filas"]
-                    h["varillas_h"]           = hc["filas"]
-                    h["h_opcional_aplicado"]  = True
-                    break
+            hc["piezas"]              = nuevas_piezas
+            hc["segmentos"]           = [seg1, seg2]
+            hc["n_h"]                 = 1                                # una línea de unión
+            hc["varillas_h"]          = varillas_h(1, hc["transv"])
+            hc["h_opcional_aplicado"] = True
 
-# Paso 3: plan de corte final.
-# a) Optimizador exacto global + prueba de girar habitaciones (puede modificar hab_info).
-# b) Se compara contra las heurísticas (mixta y cada largo solo) y se queda con el más barato.
-#    Así el resultado nunca puede ser peor que "usar un solo largo".
+# Paso 3: plan de corte final (exacto + heurísticas, se queda con el más barato)
 plan_opt     = mejorar_orientaciones(hab_info, lens, PW, precios)
 todas_piezas = [p for h in hab_info for p in h["piezas"]]
 
@@ -1213,6 +1203,15 @@ candidatos_plan = [plan_opt, resolver_mixto(todas_piezas, lens)] + \
                   [resolver_con_largo(todas_piezas, L) for L in lens]
 candidatos_plan = [c for c in candidatos_plan if c]
 plan = min(candidatos_plan, key=lambda c: costo_plan(c, precios)) if candidatos_plan else []
+
+# Control de consistencia: el plan tiene que cubrir TODAS las piezas
+_demanda = Counter(_mm(p["dim"]) for p in todas_piezas)
+_colocado = Counter(_mm(c["dim"]) for b in plan for c in b["cortes"])
+_faltan = _demanda - _colocado
+if _faltan:
+    st.error("El plan de corte no cubre todas las piezas. Faltan: "
+             + ", ".join(f"{n} × {d/_MM:.2f} m" for d, n in sorted(_faltan.items())))
+    st.stop()
 
 conteo = {4:0, 5:0, 6:0}
 for b in plan:
@@ -1227,36 +1226,23 @@ m2_aprovechados   = metros_us   * PW
 m2_desperdiciados = (metros_comp - metros_us) * PW
 pct_desp = ((metros_comp-metros_us)/metros_comp*100) if metros_comp>0 else 0
 
-# Perfiles H totales
-tot_h_perfiles = sum(h["n_h"] for h in hab_info)
-# Varillas de perfil H a comprar (cada perfil H mide 4m, necesita cubrir el largo de la habitación)
-def dim_transversal_h(h):
-    """Longitud del perfil H = dimensión perpendicular al sentido de las placas."""
-    if h.get("tipo") == "l":
-        # Para L: la dimensión transversal es el ancho total del ambiente
-        return hab_ancho(h) if h.get("orient") == "largo" else hab_largo(h)
-    return h.get("ancho", 0) if h.get("orient") == "largo" else h.get("largo", 0)
-
-tot_h_varillas = sum(
-    math.ceil(dim_transversal_h(h) / LARGO_H) * h["n_h"]
-    for h in hab_info if h["n_h"] > 0
-)
+tot_h_perfiles = sum(h["n_h"] for h in hab_info)          # líneas de unión
+tot_h_varillas = sum(h["varillas_h"] for h in hab_info)    # varillas de 4 m
 
 estructuras = {}
 for _h in hab_info:
-    _area  = _h.get("area_real")
     _perim = hab_perim(_h) if _h.get("tipo") == "l" else None
-    estructuras[_h["nombre"]] = calcular_estructura(
+    estructuras[_h["idx"]] = calcular_estructura(
         hab_largo(_h), hab_ancho(_h), _h.get("altura", 0.30), _h["orient"],
-        area_real=_area, perim_real=_perim
+        area_real=_h.get("area_real"), perim_real=_perim
     )
 
-tot_sol  = sum(e["total_soleras"]   for e in estructuras.values())
-tot_mon  = sum(e["total_montantes"] for e in estructuras.values())
-tot_mol  = sum(e["total_molduras"]  for e in estructuras.values())
+tot_sol  = sum(e["total_soleras"]    for e in estructuras.values())
+tot_mon  = sum(e["total_montantes"]  for e in estructuras.values())
+tot_mol  = sum(e["total_molduras"]   for e in estructuras.values())
 tot_tar  = sum(e["total_tarugos_n8"] for e in estructuras.values())
-tot_t1   = sum(e["total_t1"]        for e in estructuras.values())
-tot_t2   = sum(e["total_t2"]        for e in estructuras.values())
+tot_t1   = sum(e["total_t1"]         for e in estructuras.values())
+tot_t2   = sum(e["total_t2"]         for e in estructuras.values())
 total_perim = sum(e["perimetro"] for e in estructuras.values())
 
 costo_placas = sum(conteo[l]*precios[l] for l in [4,5,6])
@@ -1286,9 +1272,9 @@ cb.metric("❌ m² desperdicio",      f"{m2_desperdiciados:.2f} m²",
 cc.metric("📦 m² comprados",        f"{m2_comprados:.2f} m²")
 cd.metric("🔩 Tornillos T1",        f"{tot_t1} un.")
 ce.metric("🔧 Tornillos T2",        f"{tot_t2} un.")
-cf.metric("🔗 Perfiles H",
-          f"{tot_h_perfiles} un." if tot_h_perfiles>0 else "No necesario",
-          help=f"{tot_h_varillas} varillas de 4m a comprar" if tot_h_varillas>0 else "")
+cf.metric("🔗 Perfiles H (4m)",
+          f"{tot_h_varillas} un." if tot_h_varillas>0 else "No necesario",
+          help=f"{tot_h_perfiles} líneas de unión" if tot_h_perfiles>0 else "")
 
 if costo_total > 0:
     st.metric("💰 Costo estimado total", f"${costo_total:,.0f}")
@@ -1305,20 +1291,19 @@ st.subheader("🔧 Estructura por habitación")
 
 filas_est = []
 for h in hab_info:
-    e = estructuras[h["nombre"]]
-    varillas = (math.ceil(dim_transversal_h(h) / LARGO_H) * h["n_h"]) if h["n_h"]>0 else 0
-    h_txt = f"{h['n_h']} H ({varillas} var.)" if h["n_h"]>0 else "—"
+    e = estructuras[h["idx"]]
+    h_txt = f"{h['varillas_h']} var. ({h['n_h']} uniones)" if h["n_h"]>0 else "—"
     filas_est.append({
-        "Habitación":          h["nombre"],
-        "Dimensiones":         f"{hab_largo(h)}×{hab_ancho(h)}m",
-        "Alt. susp.":          f"{h.get('altura',0.30):.2f}m",
-        "Soleras":             e["total_soleras"],
-        "Montantes":           e["total_montantes"],
-        "Molduras PVC":        e["total_molduras"],
-        "Tarugos N°8":         e["total_tarugos_n8"],
-        "Perfil H":            h_txt,
-        "Torn. T1":            e["total_t1"],
-        "Torn. T2":            e["total_t2"],
+        "Habitación":   h["nombre"],
+        "Dimensiones":  f"{hab_largo(h)}×{hab_ancho(h)}m",
+        "Alt. susp.":   f"{h.get('altura',0.30):.2f}m",
+        "Soleras":      e["total_soleras"],
+        "Montantes":    e["total_montantes"],
+        "Molduras PVC": e["total_molduras"],
+        "Tarugos N°8":  e["total_tarugos_n8"],
+        "Perfil H":     h_txt,
+        "Torn. T1":     e["total_t1"],
+        "Torn. T2":     e["total_t2"],
     })
 st.dataframe(pd.DataFrame(filas_est), use_container_width=True, hide_index=True)
 
@@ -1328,7 +1313,6 @@ st.dataframe(pd.DataFrame(filas_est), use_container_width=True, hide_index=True)
 
 st.subheader("✂️ Plan de corte de placas")
 
-# Leyenda habitaciones
 leyenda = "".join(
     f'<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:13px">'
     f'<span style="width:12px;height:12px;border-radius:3px;background:{HAB_COLORS[i%len(HAB_COLORS)]};display:inline-block"></span>'
@@ -1337,25 +1321,19 @@ leyenda = "".join(
 )
 st.markdown(leyenda, unsafe_allow_html=True)
 
-# Avisos H por habitación
 for h in hab_info:
     if h["n_h"] > 0:
-        varillas = math.ceil(dim_transversal_h(h) / LARGO_H) * h["n_h"]
-        segs_txt = " + ".join(f"{s}m" for s in h["segmentos"])
         if h["auto_h"]:
-            origen = "obligatorio — dimensión supera largo máximo de placa"
-            color  = "🔴"
+            origen, icono = "obligatorio — la tira supera el largo máximo de placa", "🔴"
         elif h.get("h_opcional_aplicado"):
-            origen = "opcional aplicado — el motor encontró un corte que ahorra placas"
-            color  = "🟢"
+            origen, icono = "opcional aplicado — el motor encontró un corte que ahorra placas", "🟢"
         else:
-            origen = "opcional"
-            color  = "🔗"
+            origen, icono = "opcional", "🔗"
         st.info(
-            f"{color} **{h['nombre']}** — H {origen} | "
-            f"corte por fila: {segs_txt} | "
-            f"{h['n_h']} uniones | "
-            f"{varillas} varillas H de 4m"
+            f"{icono} **{h['nombre']}** — H {origen} | "
+            f"corte por fila: {texto_cortes_h(h)} | "
+            f"{h['n_h']} línea(s) de unión | "
+            f"{h['varillas_h']} varillas H de 4m"
         )
     elif h.get("forzar_h") and usar_h and not h["auto_h"]:
         st.caption(
@@ -1417,14 +1395,15 @@ for h in hab_info:
     es_l  = h.get("tipo") == "l"
     area  = h.get("area_real", hab_area(h))
     perim = hab_perim(h)
-    varillas = (math.ceil(dim_transversal_h(h) / LARGO_H) * h["n_h"]) if h["n_h"]>0 else 0
     if es_l:
         segs_txt = (f"{h['dim_larga']}m ({h['filas_l']} filas) + "
                     f"{h['dim_corta']}m ({h['filas_c']} filas)")
-        dir_txt  = f"→ largo total" if h["orient"]=="largo" else "↓ ancho total"
+        if h["n_h"] > 0:
+            segs_txt += f"  ·  con H: {texto_cortes_h(h)}"
+        dir_txt  = "→ largo total" if h["orient"]=="largo" else "↓ ancho total"
         tipo_txt = "📐 L"
     else:
-        segs_txt = " + ".join(f"{s}m" for s in h["segmentos"]) if h["n_h"]>0 else f"{h['dim_pieza']}m"
+        segs_txt = texto_cortes_h(h) if h["n_h"]>0 else f"{h['dim_pieza']}m"
         dir_txt  = ("→ largo" if h["orient"]=="largo" else "↓ ancho")+(" (fijo)" if h.get("fijo") else "")
         tipo_txt = "▭"
     filas_plac.append({
@@ -1435,7 +1414,7 @@ for h in hab_info:
         "Corte por fila": segs_txt,
         "Filas totales":  h["filas"],
         "Perím. (m)":     round(perim, 1),
-        "Perfil H":       f"{h['n_h']} H / {varillas} var." if h["n_h"]>0 else "—",
+        "Perfil H":       f"{h['n_h']} uniones / {h['varillas_h']} var." if h["n_h"]>0 else "—",
     })
 st.dataframe(pd.DataFrame(filas_plac), use_container_width=True, hide_index=True)
 
@@ -1466,4 +1445,5 @@ if st.button("📥 Generar PDF", type="primary"):
     )
 
 st.caption("Motor: optimización exacta global (ILP por patrones) con respaldo heurístico. "
-           "Perfil H: división equitativa de piezas largas. Ancho placa: 20 cm fijo.")
+           "Perfil H: tiras largas partidas en tramos de placa máxima; también en ambientes en L. "
+           "Ancho placa: 20 cm fijo.")
