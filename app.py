@@ -46,37 +46,73 @@ st.caption("Optimización global de corte — mezcla de largos, perfiles H, colo
 
 def dividir_con_h(dim, lens):
     """
-    Cuando dim > max(lens), hay que unir segmentos con perfil H.
-    Devuelve lista de segmentos lo más equitativos posible,
-    priorizando usar largos iguales (4+4 > 5+3).
+    Cuando dim > max(lens), divide en segmentos equitativos usando largos disponibles.
     Retorna: (segmentos: [float], n_perfiles_h: int)
     """
     max_L = max(lens)
     if dim <= max_L:
         return [dim], 0
 
-    # Cuántos tramos necesitamos
-    n_tramos = math.ceil(dim / max_L)
-    base      = dim / n_tramos          # largo ideal por tramo
-    # Buscar el largo de placa disponible más cercano al ideal
-    # para el tramo más corto (el último puede ser menor)
+    n_tramos  = math.ceil(dim / max_L)
     segmentos = []
     restante  = dim
     for t in range(n_tramos):
         if t < n_tramos - 1:
-            # Elegir el largo disponible más próximo al ideal sin pasarse
-            mejor = max((L for L in lens if L <= restante - (n_tramos-t-1)*0.1), default=max_L)
-            # Si el ideal está muy cerca de un largo disponible, usarlo
             for L in sorted(lens, reverse=True):
-                if L <= restante - (n_tramos-t-1)*0.1:
-                    mejor = L
+                if L <= restante - (n_tramos - t - 1) * 0.1:
+                    segmentos.append(L)
+                    restante = round(restante - L, 4)
                     break
-            segmentos.append(mejor)
-            restante -= mejor
         else:
             segmentos.append(round(restante, 4))
 
     return segmentos, n_tramos - 1
+
+
+def mejor_corte_h_opcional(dim, filas, hab_idx, todas_piezas_sin_hab, lens):
+    """
+    Para H opcional: prueba dividir dim en seg1+seg2 usando candidatos
+    basados en sobrantes naturales del pool actual.
+    Criterio de mejora: menos placas totales.
+    Retorna (seg1, seg2, plan_mejorado) o None si ningún corte mejora.
+    """
+    # Plan base sin H para esta habitación
+    piezas_base = [{"dim": dim, "hab_idx": hab_idx}] * filas
+    plan_base   = elegir_mejor_plan(todas_piezas_sin_hab + piezas_base, lens)
+    n_base      = len(plan_base)
+
+    # Candidatos a seg1: sobrantes naturales = L - d para cada largo L y dim d del pool
+    dims_pool = set(round(p["dim"], 3) for p in todas_piezas_sin_hab)
+    candidatos = set()
+    for L in lens:
+        for d in dims_pool:
+            sobra = round(L - d, 4)
+            if 0.05 < sobra < dim - 0.05 and sobra <= max(lens):
+                candidatos.add(sobra)
+        # También agregar la mitad exacta
+        candidatos.add(round(dim / 2, 4))
+
+    mejor_plan = None
+    mejor_n    = n_base  # solo mejorar si hay menos placas
+
+    for seg1 in sorted(candidatos):
+        seg2 = round(dim - seg1, 4)
+        if seg2 < 0.05 or seg2 > max(lens) + 0.0001:
+            continue
+        if seg1 > max(lens) + 0.0001:
+            continue
+
+        piezas_h = []
+        for _ in range(filas):
+            piezas_h.append({"dim": seg1, "hab_idx": hab_idx})
+            piezas_h.append({"dim": seg2, "hab_idx": hab_idx})
+
+        plan_h = elegir_mejor_plan(todas_piezas_sin_hab + piezas_h, lens)
+        if len(plan_h) < mejor_n:
+            mejor_n    = len(plan_h)
+            mejor_plan = (seg1, seg2, plan_h)
+
+    return mejor_plan
 
 
 def necesita_h(dim, lens):
@@ -134,34 +170,70 @@ def elegir_mejor_plan(piezas, lens):
 
 
 def orientacion_optima(r, idx, lens_efectivos):
-    """Elige orientación minimizando placas. lens_efectivos = máx placa por dimensión."""
+    """
+    Elige orientación minimizando placas y desperdicio.
+    Regla de prioridad:
+      1. Si una orientación entra sin H y la otra no -> elegir la que no necesita H
+      2. Si ambas entran sin H -> elegir la de menor desperdicio (evaluación global)
+      3. Si ninguna entra sin H -> usar H en la que genere menos desperdicio
+    """
     filas_largo = math.ceil(r["ancho"] / PW)
     filas_ancho  = math.ceil(r["largo"] / PW)
 
-    # Piezas para cada orientación (con H: se generan segmentos)
-    def piezas_de(dim, filas, hab_idx, lens):
+    largo_necesita_h = necesita_h(r["largo"], lens_efectivos)
+    ancho_necesita_h  = necesita_h(r["ancho"],  lens_efectivos)
+
+    def piezas_simples(dim, filas, hab_idx):
+        return [{"dim": dim, "hab_idx": hab_idx}] * filas
+
+    def piezas_con_h(dim, filas, hab_idx, lens):
         segs, _ = dividir_con_h(dim, lens)
         return [{"dim": s, "hab_idx": hab_idx} for s in segs] * filas
 
-    piezas_largo = piezas_de(r["largo"], filas_largo, idx, lens_efectivos)
-    piezas_ancho  = piezas_de(r["ancho"],  filas_ancho,  idx, lens_efectivos)
-
     if r["fijo"]:
+        if largo_necesita_h:
+            segs, n_h = dividir_con_h(r["largo"], lens_efectivos)
+            piezas = piezas_con_h(r["largo"], filas_largo, idx, lens_efectivos)
+        else:
+            segs, n_h = [r["largo"]], 0
+            piezas = piezas_simples(r["largo"], filas_largo, idx)
+        return "largo", r["largo"], filas_largo, piezas, segs, n_h * filas_largo
+
+    # Caso 1: una entra sin H y la otra no -> preferir sin H
+    if not largo_necesita_h and ancho_necesita_h:
+        segs = [r["largo"]]
+        return "largo", r["largo"], filas_largo, piezas_simples(r["largo"], filas_largo, idx), segs, 0
+
+    if largo_necesita_h and not ancho_necesita_h:
+        segs = [r["ancho"]]
+        return "ancho", r["ancho"], filas_ancho, piezas_simples(r["ancho"], filas_ancho, idx), segs, 0
+
+    # Caso 2: ambas entran sin H -> elegir la de menor desperdicio
+    if not largo_necesita_h and not ancho_necesita_h:
+        p_largo = piezas_simples(r["largo"], filas_largo, idx)
+        p_ancho  = piezas_simples(r["ancho"],  filas_ancho,  idx)
+        plan_l = elegir_mejor_plan(p_largo, lens_efectivos)
+        plan_a = elegir_mejor_plan(p_ancho,  lens_efectivos)
+        n_l = len(plan_l) if plan_l else float("inf")
+        n_a = len(plan_a) if plan_a else float("inf")
+        if n_l <= n_a:
+            return "largo", r["largo"], filas_largo, p_largo, [r["largo"]], 0
+        else:
+            return "ancho", r["ancho"], filas_ancho, p_ancho, [r["ancho"]], 0
+
+    # Caso 3: ambas necesitan H -> evaluar con segmentos y elegir menor desperdicio
+    p_largo = piezas_con_h(r["largo"], filas_largo, idx, lens_efectivos)
+    p_ancho  = piezas_con_h(r["ancho"],  filas_ancho,  idx, lens_efectivos)
+    plan_l = elegir_mejor_plan(p_largo, lens_efectivos)
+    plan_a = elegir_mejor_plan(p_ancho,  lens_efectivos)
+    n_l = len(plan_l) if plan_l else float("inf")
+    n_a = len(plan_a) if plan_a else float("inf")
+    if n_l <= n_a:
         segs, n_h = dividir_con_h(r["largo"], lens_efectivos)
-        return "largo", r["largo"], filas_largo, piezas_largo, segs, n_h * filas_largo
-
-    plan_largo = elegir_mejor_plan(piezas_largo, lens_efectivos)
-    plan_ancho  = elegir_mejor_plan(piezas_ancho,  lens_efectivos)
-
-    n_largo = len(plan_largo) if plan_largo is not None else float("inf")
-    n_ancho  = len(plan_ancho)  if plan_ancho  is not None else float("inf")
-
-    if n_largo <= n_ancho:
-        segs, n_h = dividir_con_h(r["largo"], lens_efectivos)
-        return "largo", r["largo"], filas_largo, piezas_largo, segs, n_h * filas_largo
+        return "largo", r["largo"], filas_largo, p_largo, segs, n_h * filas_largo
     else:
         segs, n_h = dividir_con_h(r["ancho"], lens_efectivos)
-        return "ancho", r["ancho"], filas_ancho, piezas_ancho, segs, n_h * filas_ancho
+        return "ancho", r["ancho"], filas_ancho, p_ancho, segs, n_h * filas_ancho
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ESTRUCTURA
@@ -486,9 +558,9 @@ for i, hab in enumerate(st.session_state.habitaciones):
             with c5:
                 hab["fijo"]     = st.checkbox("Sentido fijo (→)", value=hab["fijo"], key=f"fij_{i}")
             with c6:
-                hab["forzar_h"] = st.checkbox("🔗 Forzar H", value=hab.get("forzar_h",False),
+                hab["forzar_h"] = st.checkbox("🔗 Usar H", value=hab.get("forzar_h",False),
                                                key=f"fh_{i}",
-                                               help="Forzar uso de perfil H aunque la placa alcance")
+                                               help="Activa perfil H. Si la placa no alcanza, es obligatorio. Si alcanza, el motor busca el corte óptimo con H que ahorre más placas.")
             with c7:
                 st.write("")
                 if st.button("🗑️", key=f"del_{i}",
@@ -510,47 +582,66 @@ if not lens:
 
 habs = st.session_state.habitaciones
 
+# Paso 1: determinar orientación de cada habitación (sin H opcional aún)
 hab_info = []
 for i, h in enumerate(habs):
-    # Si forzar_h o dim supera max placa, las piezas se dividen en segmentos
     orient, dim_pieza, filas, piezas, segmentos, n_h = orientacion_optima(h, i, lens)
 
-    # Si H está desactivado globalmente, ignorar división
+    # H desactivado globalmente
     if not usar_h:
         if necesita_h(dim_pieza, lens):
-            st.warning(f"⚠️ **{h['nombre']}**: la dimensión {dim_pieza}m supera el largo máximo "
+            st.warning(f"⚠️ **{h['nombre']}**: {dim_pieza}m supera el largo máximo "
                        f"disponible ({max(lens)}m). Activá el perfil H en la barra lateral.")
-        n_h = 0
+        n_h       = 0
         segmentos = [dim_pieza]
-        piezas = [{"dim": dim_pieza, "hab_idx": i}] * filas
-
-    # Si se fuerza H en una habitación específica (aunque no sea necesario)
-    if h.get("forzar_h", False) and usar_h and n_h == 0:
-        # Dividir a la mitad aproximada
-        mitad = dim_pieza / 2
-        mejor_seg = max((L for L in lens if L >= mitad), default=max(lens))
-        seg2 = round(dim_pieza - mejor_seg, 4)
-        if seg2 > 0:
-            segmentos = [mejor_seg, seg2]
-            n_h = filas  # 1 H por fila
-            piezas = []
-            for _ in range(filas):
-                piezas += [{"dim": s, "hab_idx": i} for s in segmentos]
-
-    # Calcular varillas H necesarias
-    varillas_h = math.ceil(n_h * 1) if n_h > 0 else 0  # 1 perfil H por unión por fila
+        piezas    = [{"dim": dim_pieza, "hab_idx": i}] * filas
 
     hab_info.append({
-        **h, "idx":i, "orient":orient,
-        "dim_pieza": dim_pieza,
-        "dim_pieza_orig": dim_pieza,
-        "filas": filas,
-        "piezas": piezas,
-        "segmentos": segmentos,
-        "n_h": n_h,
-        "varillas_h": varillas_h,
+        **h, "idx": i, "orient": orient,
+        "dim_pieza": dim_pieza, "dim_pieza_orig": dim_pieza,
+        "filas": filas, "piezas": piezas,
+        "segmentos": segmentos, "n_h": n_h,
+        "varillas_h": n_h,
         "auto_h": necesita_h(dim_pieza, lens) and usar_h,
+        "h_opcional_aplicado": False,
     })
+
+# Paso 2: para habitaciones con "Usar H" opcional (no obligatorio),
+# buscar el corte que maximiza el ahorro de placas en el contexto global.
+# Se evalúan en orden de mayor a menor dimensión (las más grandes tienen más impacto).
+if usar_h:
+    candidatas = [
+        h for h in hab_info
+        if h.get("forzar_h", False) and h["n_h"] == 0  # H opcional activado, no obligatorio
+    ]
+    # Ordenar por dimensión descendente para evaluar primero las de mayor impacto
+    candidatas.sort(key=lambda h: h["dim_pieza"], reverse=True)
+
+    for hc in candidatas:
+        # Piezas de todas las otras habitaciones (ya resueltas)
+        otras_piezas = [
+            p for h in hab_info
+            if h["idx"] != hc["idx"]
+            for p in h["piezas"]
+        ]
+        resultado = mejor_corte_h_opcional(
+            hc["dim_pieza"], hc["filas"], hc["idx"], otras_piezas, lens
+        )
+        if resultado:
+            seg1, seg2, _ = resultado
+            nuevas_piezas = []
+            for _ in range(hc["filas"]):
+                nuevas_piezas.append({"dim": seg1, "hab_idx": hc["idx"]})
+                nuevas_piezas.append({"dim": seg2, "hab_idx": hc["idx"]})
+            # Actualizar esta habitación en hab_info
+            for h in hab_info:
+                if h["idx"] == hc["idx"]:
+                    h["piezas"]               = nuevas_piezas
+                    h["segmentos"]            = [seg1, seg2]
+                    h["n_h"]                  = hc["filas"]
+                    h["varillas_h"]           = hc["filas"]
+                    h["h_opcional_aplicado"]  = True
+                    break
 
 todas_piezas = [p for h in hab_info for p in h["piezas"]]
 plan = elegir_mejor_plan(todas_piezas, lens)
@@ -669,12 +760,25 @@ for h in hab_info:
     if h["n_h"] > 0:
         varillas = math.ceil(h["n_h"] * h["dim_pieza"] / LARGO_H)
         segs_txt = " + ".join(f"{s}m" for s in h["segmentos"])
-        origen   = "automático" if h["auto_h"] else "forzado"
+        if h["auto_h"]:
+            origen = "obligatorio — dimensión supera largo máximo de placa"
+            color  = "🔴"
+        elif h.get("h_opcional_aplicado"):
+            origen = "opcional aplicado — el motor encontró un corte que ahorra placas"
+            color  = "🟢"
+        else:
+            origen = "opcional"
+            color  = "🔗"
         st.info(
-            f"🔗 **{h['nombre']}** usa perfil H ({origen}) — "
-            f"cada fila: {segs_txt} | "
-            f"{h['n_h']} uniones en total | "
-            f"{varillas} varillas H de 4m a comprar"
+            f"{color} **{h['nombre']}** — H {origen} | "
+            f"corte por fila: {segs_txt} | "
+            f"{h['n_h']} uniones | "
+            f"{varillas} varillas H de 4m"
+        )
+    elif h.get("forzar_h") and usar_h and not h["auto_h"]:
+        st.caption(
+            f"ℹ️ **{h['nombre']}**: H activado pero ningún corte mejora el resultado — "
+            f"se mantiene sin H."
         )
 
 st.write("")
