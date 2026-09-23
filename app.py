@@ -169,27 +169,42 @@ def elegir_mejor_plan(piezas, lens):
     return mejor_plan or []
 
 
-def calcular_piezas_l(largo_total, ancho_total, largo_reducido, ancho_reducido, idx, lens):
+def calcular_piezas_l(largo_total, ancho_total, largo_recorte, ancho_recorte, idx, lens):
     """
     Calcula piezas para ambiente en L.
-    Orientación A: placas corren en dirección largo_total.
-      - ceil(ancho_total/PW) filas de largo_total  (incluye fila de esquina)
-      - ceil(ancho_reducido/PW) filas de largo_reducido
-    Orientación B: placas corren en dirección ancho_total (L rotada 90°).
-    Elige la orientación con menor número de placas.
+    
+    El usuario ingresa el RECORTE (el pedazo que falta).
+    Internamente calculamos el TRAMO que queda:
+      largo_tramo = largo_total - largo_recorte
+      ancho_tramo = ancho_total - ancho_recorte
+    
+    Orientación A: placas corren en dirección largo_total (horizontal).
+      - ceil(ancho_total / PW)  filas de largo_total   (cubren toda la L, incluye esquina)
+      - ceil(ancho_tramo / PW)  filas de largo_tramo   (solo el tramo que queda)
+      
+    Orientación B: placas corren en dirección ancho_total (vertical).
+      - ceil(largo_total / PW)  filas de ancho_total   (cubren toda la L)
+      - ceil(largo_tramo / PW)  filas de ancho_tramo   (solo el tramo que queda)
+    
+    Elige la orientación con menor número de placas totales.
     """
-    filas_A_l = math.ceil(ancho_total    / PW)
-    filas_A_c = math.ceil(ancho_reducido / PW)
+    largo_tramo = round(largo_total - largo_recorte, 4)
+    ancho_tramo = round(ancho_total - ancho_recorte, 4)
+
+    # Orientación A: placas → largo
+    filas_A_l = math.ceil(ancho_total  / PW)
+    filas_A_c = math.ceil(ancho_tramo  / PW)
     piezas_A  = (
-        [{"dim": largo_total,    "hab_idx": idx}] * filas_A_l +
-        [{"dim": largo_reducido, "hab_idx": idx}] * filas_A_c
+        [{"dim": largo_total,  "hab_idx": idx}] * filas_A_l +
+        [{"dim": largo_tramo,  "hab_idx": idx}] * filas_A_c
     )
 
-    filas_B_l = math.ceil(largo_total    / PW)
-    filas_B_c = math.ceil(largo_reducido / PW)
+    # Orientación B: placas → ancho
+    filas_B_l = math.ceil(largo_total  / PW)
+    filas_B_c = math.ceil(largo_tramo  / PW)
     piezas_B  = (
-        [{"dim": ancho_total,    "hab_idx": idx}] * filas_B_l +
-        [{"dim": ancho_reducido, "hab_idx": idx}] * filas_B_c
+        [{"dim": ancho_total,  "hab_idx": idx}] * filas_B_l +
+        [{"dim": ancho_tramo,  "hab_idx": idx}] * filas_B_c
     )
 
     plan_A = elegir_mejor_plan(piezas_A, lens)
@@ -198,9 +213,9 @@ def calcular_piezas_l(largo_total, ancho_total, largo_reducido, ancho_reducido, 
     n_B = len(plan_B) if plan_B else float("inf")
 
     if n_A <= n_B:
-        return "largo", piezas_A, filas_A_l, filas_A_c, largo_total, largo_reducido
+        return "largo", piezas_A, filas_A_l, filas_A_c, largo_total, largo_tramo
     else:
-        return "ancho", piezas_B, filas_B_l, filas_B_c, ancho_total, ancho_reducido
+        return "ancho", piezas_B, filas_B_l, filas_B_c, ancho_total, ancho_tramo
 
 
 def diagrama_l_svg(lt, at, lr, ar, color):
@@ -329,16 +344,21 @@ def hab_area(h):
     """Retorna el área real de la habitación."""
     if h.get("tipo") == "l":
         lt, at = h["largo_total"], h["ancho_total"]
-        lr, ar = h["largo_reducido"], h["ancho_reducido"]
-        return round(lt * at - (lt - lr) * ar, 4)
+        # largo_reducido y ancho_reducido son el RECORTE (el pedazo que falta)
+        lr_rec = h["largo_reducido"]
+        ar_rec = h["ancho_reducido"]
+        return round(lt * at - lr_rec * ar_rec, 4)
     return round(h.get("largo", 0) * h.get("ancho", 0), 4)
 
 def hab_perim(h):
     """Retorna el perímetro de la habitación."""
     if h.get("tipo") == "l":
-        lt, at = h["largo_total"], h["ancho_total"]
-        lr, ar = h["largo_reducido"], h["ancho_reducido"]
-        return round(2 * (lt + at + (lt - lr) + ar), 4)
+        lt, at  = h["largo_total"],    h["ancho_total"]
+        lr_rec  = h["largo_reducido"]  # largo del recorte
+        ar_rec  = h["ancho_reducido"]  # ancho del recorte
+        # Perímetro de la L: suma de los 6 lados
+        # lado1=lt, lado2=at, lado3=lr_rec, lado4=ar_rec, lado5=(lt-lr_rec), lado6=(at-ar_rec)
+        return round(lt + at + lr_rec + ar_rec + (lt - lr_rec) + (at - ar_rec), 4)
     return round(2 * (h.get("largo", 0) + h.get("ancho", 0)), 4)
 
 def calcular_estructura(largo, ancho, altura, orientacion):
@@ -654,7 +674,7 @@ def agregar_l():
     st.session_state.habitaciones.append(
         {"hid": hid, "nombre": f"Ambiente L {n}", "tipo": "l",
          "largo_total": 4.0, "ancho_total": 1.5,
-         "largo_reducido": 2.0, "ancho_reducido": 0.8,
+         "largo_reducido": 1.5, "ancho_reducido": 0.5,
          "altura": 0.30, "forzar_h": False})
 
 def eliminar(hid):
@@ -700,10 +720,10 @@ for i, hab in enumerate(st.session_state.habitaciones):
                     hab["ancho_total"]    = st.number_input("Ancho total",    value=hab["ancho_total"],
                                                              step=0.1, min_value=0.1, key=f"at_{hid}")
                 with r1c4:
-                    hab["largo_reducido"] = st.number_input("Largo reducido", value=hab["largo_reducido"],
+                    hab["largo_reducido"] = st.number_input("Largo recorte", value=hab["largo_reducido"],
                                                              step=0.1, min_value=0.1, key=f"lr_{hid}")
                 with r1c5:
-                    hab["ancho_reducido"] = st.number_input("Ancho reducido", value=hab["ancho_reducido"],
+                    hab["ancho_reducido"] = st.number_input("Ancho recorte", value=hab["ancho_reducido"],
                                                              step=0.1, min_value=0.1, key=f"ar_{hid}")
                 with r1c6:
                     hab["altura"]  = st.number_input("Alt. susp.", value=hab.get("altura",0.30),
@@ -779,13 +799,15 @@ for i, h in enumerate(habs):
         at  = h["ancho_total"]
         lr  = h["largo_reducido"]
         ar  = h["ancho_reducido"]
+        lr_rec = h["largo_reducido"]  # recorte
+        ar_rec = h["ancho_reducido"]  # recorte
         orient, piezas, filas_l, filas_c, dim_larga, dim_corta = calcular_piezas_l(
-            lt, at, lr, ar, i, lens)
+            lt, at, lr_rec, ar_rec, i, lens)
         filas      = filas_l + filas_c
         dim_pieza  = dim_larga   # dim principal para referencia
         segmentos  = [dim_larga]
         n_h        = 0
-        area_l     = lt * at - (lt - lr) * ar   # área real de la L
+        area_l     = hab_area(h)   # área real de la L (total - recorte)
         hab_info.append({
             **h, "idx": i, "orient": orient,
             "dim_pieza": dim_pieza, "dim_pieza_orig": dim_pieza,
