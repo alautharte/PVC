@@ -638,10 +638,17 @@ def eliminar(hid):
         h for h in st.session_state.habitaciones if h.get("hid") != hid
     ]
 
-# Asegurar que todas las habitaciones tengan hid (migración)
-for _j, _h in enumerate(st.session_state.habitaciones):
+# Migración: garantizar hid único en TODAS las habitaciones antes del loop
+if "hid_counter" not in st.session_state:
+    st.session_state.hid_counter = 1
+_max_hid = 0
+for _h in st.session_state.habitaciones:
     if "hid" not in _h:
-        _h["hid"] = _j + 1
+        _h["hid"] = st.session_state.hid_counter
+        st.session_state.hid_counter += 1
+    _max_hid = max(_max_hid, _h["hid"])
+# Asegurar que el counter siempre esté por encima del mayor hid existente
+st.session_state.hid_counter = max(st.session_state.hid_counter, _max_hid + 1)
 
 for i, hab in enumerate(st.session_state.habitaciones):
     color    = HAB_COLORS[i%len(HAB_COLORS)]
