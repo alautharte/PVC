@@ -453,9 +453,10 @@ def _expandir_grupos(grupos, idx, lens, usar_h):
 
 
 def calcular_piezas_l(lt, at, lr, ar, idx, lens, otras_piezas=None,
-                      usar_h=True, precios=None):
+                      usar_h=True, precios=None, forzar=None):
     """
     Evalúa las dos orientaciones de una L y elige:
+      0. Si 'forzar' es "largo" o "ancho" -> usa ese sentido sí o sí (sentido fijo)
       1. Si una entra sin H y la otra no -> la que no necesita H
       2. Si ambas (o ninguna) necesitan H -> la de menor costo en contexto global
     Retorna dict con orient, grupos, piezas, info, n_h, varillas_h.
@@ -476,6 +477,9 @@ def calcular_piezas_l(lt, at, lr, ar, idx, lens, otras_piezas=None,
             "n_h":        sum(g["lineas_h"] for g in info),
             "varillas_h": sum(g["varillas_h"] for g in info),
         })
+
+    if forzar in ("largo", "ancho"):
+        return next(o for o in opciones if o["orient"] == forzar)
 
     entran = [o for o in opciones if o["entra"]]
     if not entran:
@@ -980,7 +984,8 @@ def agregar_l():
         {"hid": hid, "nombre": _nombre_libre("Ambiente L"), "tipo": "l",
          "largo_total": 4.0, "ancho_total": 1.5,
          "largo_reducido": 1.5, "ancho_reducido": 0.5,
-         "altura": 0.30, "forzar_h": False, "esquina": "inf_izq"})
+         "altura": 0.30, "forzar_h": False, "esquina": "inf_izq",
+         "sentido": "auto"})
 
 def eliminar(hid):
     st.session_state.habitaciones = [
@@ -1050,6 +1055,18 @@ for i, hab in enumerate(st.session_state.habitaciones):
                         index=["inf_izq","inf_der","sup_izq","sup_der"].index(
                             hab.get("esquina","inf_izq")),
                         key=f"esq_{hid}",
+                    )
+                    _opts_sent = ["auto", "largo", "ancho"]
+                    hab["sentido"] = st.selectbox(
+                        "Sentido de placas",
+                        options=_opts_sent,
+                        format_func=lambda x: {
+                            "auto":  "🔄 Automático (óptimo)",
+                            "largo": "→ Fijo a lo largo",
+                            "ancho": "↓ Fijo a lo ancho",
+                        }[x],
+                        index=_opts_sent.index(hab.get("sentido", "auto")),
+                        key=f"sent_{hid}",
                     )
                 with col_svg:
                     try:
@@ -1124,7 +1141,8 @@ for i, h in enumerate(habs):
         otras_piezas_ctx = [p for h2 in hab_info for p in h2["piezas"]]
         sel = calcular_piezas_l(
             lt, at, h["largo_reducido"], h["ancho_reducido"], i, lens,
-            otras_piezas=otras_piezas_ctx, usar_h=usar_h, precios=precios)
+            otras_piezas=otras_piezas_ctx, usar_h=usar_h, precios=precios,
+            forzar=h.get("sentido", "auto"))
         (dim_larga, filas_l), (dim_corta, filas_c) = sel["grupos"]
         info_larga = next((g for g in sel["info"] if g["dim"] == dim_larga), None)
         hab_info.append({
@@ -1140,7 +1158,8 @@ for i, h in enumerate(habs):
             "area_real": hab_area(h),
             "largo": lt, "ancho": at,
             "transv": at if sel["orient"] == "largo" else lt,
-            "fijo": False, "forzar_h": False,
+            "fijo": h.get("sentido", "auto") in ("largo", "ancho"),
+            "forzar_h": False,
         })
     else:
         orient, dim_pieza, filas, piezas, segmentos, n_h = orientacion_optima(h, i, lens)
@@ -1400,7 +1419,8 @@ for h in hab_info:
                     f"{h['dim_corta']}m ({h['filas_c']} filas)")
         if h["n_h"] > 0:
             segs_txt += f"  ·  con H: {texto_cortes_h(h)}"
-        dir_txt  = "→ largo total" if h["orient"]=="largo" else "↓ ancho total"
+        dir_txt  = ("→ largo total" if h["orient"]=="largo" else "↓ ancho total") \
+                   + (" (fijo)" if h.get("fijo") else "")
         tipo_txt = "📐 L"
     else:
         segs_txt = texto_cortes_h(h) if h["n_h"]>0 else f"{h['dim_pieza']}m"
