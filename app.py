@@ -11,7 +11,7 @@ from reportlab.lib import colors
 from reportlab.lib.units import cm
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable,
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, PageBreak,
 )
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.utils import ImageReader
@@ -44,7 +44,21 @@ SEP_MONTANTES   = 0.50
 DIST_TARUGOS    = 0.50
 TORNILLOS_T1_M2 = 12
 TORNILLOS_T2_M2 =  5
-EPS             = 1e-4
+EPS             = 1e-4   # 0.1 mm — tolerancia de comparación en la capa geométrica (metros, cuantizada a mm)
+MAX_PATRONES    = 20000  # techo de patrones de corte que se enumeran antes de abortar el ILP
+
+# Modelo de precisión: dos capas, cada una con su propio redondeo, documentadas.
+#   1) Geometría (metros): toda dimensión se cuantiza a milímetros con Q(); las
+#      comparaciones usan EPS < 0.5 mm, así que nunca hay ambigüedad de borde.
+#   2) ILP (resolver_optimo / _patrones): opera en enteros de milímetro exactos
+#      vía _mm()/_MM, sin float, por eso ahí no hace falta EPS.
+def Q(x):
+    """Cuantiza una dimensión en metros a milímetros (3 decimales)."""
+    return round(x, 3)
+
+# Avisos que la corrida actual quiere mostrarle al usuario (se resetea en cada
+# rerun de Streamlit porque el módulo se re-ejecuta entero).
+AVISOS = []
 
 st.title("🏠 Presupuestador Cielorrasos PVC")
 st.caption("Optimización global de corte — mezcla de largos, perfiles H, colores por habitación")
@@ -81,12 +95,12 @@ def dividir_con_h(dim, lens):
 
     n_tramos  = math.ceil(round(dim / max_L, 6))
     segmentos = [float(max_L)] * (n_tramos - 1)
-    resto     = round(dim - max_L * (n_tramos - 1), 4)
+    resto     = Q(dim - max_L * (n_tramos - 1))
 
     if resto < MIN_TRAMO_H:
-        ultimo        = round(segmentos[-1] + resto, 4)
-        segmentos[-1] = round(ultimo / 2, 4)
-        resto         = round(ultimo - segmentos[-1], 4)
+        ultimo        = Q(segmentos[-1] + resto)
+        segmentos[-1] = Q(ultimo / 2)
+        resto         = Q(ultimo - segmentos[-1])
 
     segmentos.append(resto)
     return segmentos, n_tramos - 1
@@ -107,16 +121,16 @@ def mejor_corte_h_opcional(dim, filas, hab_idx, todas_piezas_sin_hab, lens):
     candidatos = set()
     for L in lens:
         for d in dims_pool:
-            sobra = round(L - d, 4)
+            sobra = Q(L - d)
             if 0.05 < sobra < dim - 0.05 and sobra <= max(lens):
                 candidatos.add(sobra)
-        candidatos.add(round(dim / 2, 4))
+        candidatos.add(Q(dim / 2))
 
     mejor_plan = None
     mejor_n    = n_base
 
     for seg1 in sorted(candidatos):
-        seg2 = round(dim - seg1, 4)
+        seg2 = Q(dim - seg1)
         if seg2 < 0.05 or seg2 > max(lens) + EPS:
             continue
         if seg1 > max(lens) + EPS:
@@ -159,15 +173,15 @@ def mejor_largo_para_pieza(d, lens):
     return best_L
 
 
-def resolver_mixto(piezas, lens):
+def _resolver_ffd(piezas, elegir_largo):
     """
-    Bin-packing 1D MIXTO: para cada pieza elige el largo de placa con
-    menor desperdicio individual, reutilizando sobrantes entre piezas.
-    Retorna None si alguna pieza no entra en ninguna placa (antes la salteaba
-    en silencio y el resultado quedaba con desperdicio negativo).
+    Motor único de bin-packing 1D First-Fit-Decreasing. Antes vivía duplicado
+    en resolver_mixto y resolver_con_largo con una sola diferencia real: cómo
+    se elige el largo de placa para una pieza que no entra en ningún
+    sobrante abierto. Esa diferencia ahora es el parámetro 'elegir_largo'
+    (dim -> L o None si no hay ningún largo que la contenga).
+    Retorna None si alguna pieza no entra en ninguna placa disponible.
     """
-    if not piezas or not lens:
-        return []
     sorted_p  = sorted(piezas, key=lambda x: -x["dim"])
     sobrantes = []
     plan      = []
@@ -183,7 +197,7 @@ def resolver_mixto(piezas, lens):
                 usado = True
                 break
         if not usado:
-            L = mejor_largo_para_pieza(p["dim"], lens)
+            L = elegir_largo(p["dim"])
             if L is None:
                 return None
             libre = max(0.0, L - p["dim"])
@@ -195,32 +209,23 @@ def resolver_mixto(piezas, lens):
     return plan
 
 
+def resolver_mixto(piezas, lens):
+    """
+    Bin-packing 1D MIXTO: para cada pieza elige el largo de placa con
+    menor desperdicio individual, reutilizando sobrantes entre piezas.
+    Retorna None si alguna pieza no entra en ninguna placa (antes la salteaba
+    en silencio y el resultado quedaba con desperdicio negativo).
+    """
+    if not piezas or not lens:
+        return []
+    return _resolver_ffd(piezas, lambda d: mejor_largo_para_pieza(d, lens))
+
+
 def resolver_con_largo(piezas, L):
     """Bin-packing 1D con largo L fijo. Retorna None si alguna pieza no cabe."""
-    sorted_p  = sorted(piezas, key=lambda x: -x["dim"])
-    sobrantes = []
-    plan      = []
-    for p in sorted_p:
-        if L < p["dim"] - EPS:
-            return None
-        sobrantes.sort(key=lambda s: s["libre"])
-        usado = False
-        for s in sobrantes:
-            if s["libre"] >= p["dim"] - EPS:
-                bin_ = plan[s["plan_idx"]]
-                bin_["cortes"].append({"dim": p["dim"], "hab_idx": p["hab_idx"]})
-                s["libre"]    = max(0.0, s["libre"] - p["dim"])
-                bin_["libre"] = s["libre"]
-                usado = True
-                break
-        if not usado:
-            libre = max(0.0, L - p["dim"])
-            idx   = len(plan)
-            plan.append({"largo_placa": L,
-                         "cortes": [{"dim": p["dim"], "hab_idx": p["hab_idx"]}],
-                         "libre": libre})
-            sobrantes.append({"plan_idx": idx, "libre": libre})
-    return plan
+    if not piezas:
+        return []
+    return _resolver_ffd(piezas, lambda d: L if L >= d - EPS else None)
 
 
 def elegir_mejor_plan(piezas, lens):
@@ -251,10 +256,24 @@ def _mm(x):
     return int(round(x * _MM))
 
 
-def _patrones(L_mm, dims, demanda, kerf):
+class _PatronesExcedidos(Exception):
+    """Señal interna: el catálogo de piezas generó más patrones que MAX_PATRONES.
+    Se usa para abortar la enumeración temprano en vez de colgar la app; el
+    llamador (resolver_optimo) la atrapa y cae al motor heurístico."""
+
+
+def _patrones(L_mm, dims, demanda, kerf, tope_global):
     """
     Enumera patrones MAXIMALES de corte para una placa de L_mm.
     Con kerf, n piezas ocupan n*d + (n-1)*kerf  ->  capacidad efectiva L+kerf.
+
+    tope_global es un contador mutable ([int]) compartido entre TODOS los
+    largos de placa de esta corrida de resolver_optimo: si el catálogo tiene
+    piezas muy chicas (remates de 20 cm) frente a placas largas (6 m), la
+    cantidad de combinaciones puede crecer exponencialmente. En vez de dejar
+    que eso cuelgue el proceso, se aborta apenas se supera MAX_PATRONES y el
+    optimizador exacto cede el turno a las heurísticas (que siempre corren,
+    ver candidatos_plan más abajo).
     """
     dims = sorted(dims, reverse=True)
     cap  = L_mm + kerf
@@ -266,6 +285,9 @@ def _patrones(L_mm, dims, demanda, kerf):
                           for j, d in enumerate(dims))
             if maximal and any(cuenta):
                 pats.append({d: c for d, c in zip(dims, cuenta) if c})
+                tope_global[0] += 1
+                if tope_global[0] > MAX_PATRONES:
+                    raise _PatronesExcedidos()
             return
         d    = dims[i]
         tope = min(demanda[d], libre // (d + kerf))
@@ -313,10 +335,18 @@ def resolver_optimo(piezas, lens, precios=None, kerf=0.0, limite_seg=15):
 
     usar_precio = bool(precios) and all(precios.get(L, 0) > 0 for L in lens)
 
+    contador = [0]   # compartido entre todos los L: ver _PatronesExcedidos
     columnas = []
-    for L in lens:
-        for pat in _patrones(_mm(L), dims, demanda, kerf_mm):
-            columnas.append((L, pat))
+    try:
+        for L in lens:
+            for pat in _patrones(_mm(L), dims, demanda, kerf_mm, contador):
+                columnas.append((L, pat))
+    except _PatronesExcedidos:
+        AVISOS.append(
+            f"El catálogo de piezas es demasiado grande/fino para el optimizador "
+            f"exacto (más de {MAX_PATRONES} patrones de corte posibles). Se usó "
+            f"el motor heurístico para esta combinación de largos.")
+        return None
 
     prob = pulp.LpProblem("corte_pvc", pulp.LpMinimize)
     x = [pulp.LpVariable(f"x{k}", lowBound=0, cat="Integer") for k in range(len(columnas))]
@@ -332,11 +362,23 @@ def resolver_optimo(piezas, lens, precios=None, kerf=0.0, limite_seg=15):
 
     try:
         prob.solve(pulp.PULP_CBC_CMD(msg=0, timeLimit=limite_seg))
-    except Exception:
+    except pulp.PulpSolverError as e:
+        AVISOS.append(f"El solver CBC falló al resolver el corte ({e}); se usó heurística.")
         return None
     estado = pulp.LpStatus[prob.status]
     if estado in ("Infeasible", "Unbounded") or any(v.value() is None for v in x):
         return None
+    if estado != "Optimal":
+        # CBC llegó al límite de tiempo sin poder DEMOSTRAR optimalidad; el
+        # plan que devuelve puede ser subóptimo. Igual se usa como candidato
+        # (compite contra las heurísticas más abajo, nunca da peor resultado
+        # que ellas), pero se avisa porque puede no ser el mínimo teórico.
+        AVISOS.append(
+            f"El optimizador exacto no llegó a demostrar que el corte es óptimo "
+            f"dentro de {limite_seg}s (estado: {estado}). El plan mostrado es "
+            f"válido y se comparó contra las heurísticas, pero podría no ser el "
+            f"mínimo absoluto de placas. Subí el límite de tiempo en el código "
+            f"(resolver_optimo, limite_seg) si necesitás la prueba de óptimo.")
 
     placas = []
     for k, (L, pat) in enumerate(columnas):
@@ -443,11 +485,11 @@ def _grupos_l(lt, at, lr, ar, orient):
     """
     if orient == "ancho":
         total  = n_filas(lt)
-        largas = min(n_filas(round(lt - lr, 4)), total)
-        return [(round(at, 4), largas), (round(at - ar, 4), total - largas)]
+        largas = min(n_filas(Q(lt - lr)), total)
+        return [(Q(at), largas), (Q(at - ar), total - largas)]
     total  = n_filas(at)
-    largas = min(n_filas(round(at - ar, 4)), total)
-    return [(round(lt, 4), largas), (round(lt - lr, 4), total - largas)]
+    largas = min(n_filas(Q(at - ar)), total)
+    return [(Q(lt), largas), (Q(lt - lr), total - largas)]
 
 
 def _expandir_grupos(grupos, idx, lens, usar_h):
@@ -664,15 +706,15 @@ def hab_ancho(h):
 def hab_area(h):
     """Área real. En L: rectángulo total menos el recorte (lo que falta)."""
     if h.get("tipo") == "l":
-        return round(h["largo_total"] * h["ancho_total"]
-                     - h["largo_reducido"] * h["ancho_reducido"], 4)
-    return round(h.get("largo", 0) * h.get("ancho", 0), 4)
+        return Q(h["largo_total"] * h["ancho_total"]
+                - h["largo_reducido"] * h["ancho_reducido"])
+    return Q(h.get("largo", 0) * h.get("ancho", 0))
 
 def hab_perim(h):
     """Perímetro. En una L ortogonal es igual al del rectángulo que la contiene."""
     if h.get("tipo") == "l":
-        return round(2 * (h["largo_total"] + h["ancho_total"]), 4)
-    return round(2 * (h.get("largo", 0) + h.get("ancho", 0)), 4)
+        return Q(2 * (h["largo_total"] + h["ancho_total"]))
+    return Q(2 * (h.get("largo", 0) + h.get("ancho", 0)))
 
 def calcular_estructura(largo, ancho, altura, orientacion,
                         area_real=None, perim_real=None):
@@ -736,7 +778,9 @@ def logo_imagen():
             return None
         with open(p, "rb") as f:
             return ImageReader(io.BytesIO(f.read()))
-    except Exception:
+    except (OSError, IOError):
+        # logo.png ausente, sin permisos de lectura, o corrupto: el PDF sigue
+        # generándose igual, solo cae al título de texto en vez del logo.
         return None
 
 
@@ -837,7 +881,12 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     story += [t_est, Spacer(1,5)]
 
     story.append(Paragraph("DETALLE DE PLACAS PVC POR HABITACIÓN", s_sub))
-    ph = ["Habitación","Área (m²)","Dirección","Dim. placa","Filas","Perím.","Uniones H","Varillas H (4m)"]
+    s_ph = ParagraphStyle("ph", fontSize=7.5, textColor=colors.white,
+                          fontName="Helvetica-Bold", leading=9, alignment=TA_CENTER)
+    def _ph(txt):
+        return Paragraph(txt.replace(" ", "<br/>", 1), s_ph)
+    ph = [_ph("Habitación"), _ph("Área (m²)"), _ph("Dirección"), _ph("Medida placa"),
+          _ph("Cantidad placas"), _ph("Perím."), _ph("Uniones H"), _ph("Varillas H (4m)")]
     prows = [ph]
     for h in hab_info:
         dir_ = ("→ largo" if h["orient"]=="largo" else "↓ ancho")+(" (fijo)" if h.get("fijo") else "")
@@ -845,11 +894,11 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
                       f"{h['dim_pieza']}m", str(h["filas"]), f"{hab_perim(h):.1f}",
                       str(h["n_h"]) if h["n_h"]>0 else "—",
                       str(h["varillas_h"]) if h["n_h"]>0 else "—"])
-    pw2 = [W*0.18,W*0.10,W*0.16,W*0.10,W*0.08,W*0.10,W*0.12,W*0.16]
+    pw2 = [W*0.16,W*0.09,W*0.15,W*0.11,W*0.10,W*0.09,W*0.12,W*0.18]
     t_plac = Table(prows, colWidths=pw2, repeatRows=1)
     t_plac.setStyle(TableStyle([
         ("BACKGROUND",(0,0),(-1,0),NAVY), ("TEXTCOLOR",(0,0),(-1,0),colors.white),
-        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"), ("FONTSIZE",(0,0),(-1,-1),7.5),
+        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"), ("FONTSIZE",(0,1),(-1,-1),7.5),
         ("ALIGN",(0,0),(-1,-1),"CENTER"), ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
         ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,LIGHT_GRAY]),
         ("GRID",(0,0),(-1,-1),0.4,MID_GRAY),
@@ -857,6 +906,7 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     ]))
     story += [t_plac, Spacer(1,5)]
 
+    story.append(PageBreak())
     story.append(Paragraph("PLAN DE CORTE — INSTRUCCIONES PASO A PASO", s_sub))
     story.append(Paragraph("Cada fila es una placa física.", s_body))
     story.append(Spacer(1,3))
@@ -969,12 +1019,20 @@ if "habitaciones" not in st.session_state:
     ]
     st.session_state.hid_counter = 3
 
+# hid_counter es la única fuente de verdad para asignar IDs de habitación:
+# se inicializa UNA vez acá (nunca dentro de _next_hid) y de ahí en más solo
+# se lee y se incrementa. Streamlit ejecuta los callbacks de los botones
+# (agregar/agregar_l/eliminar) de forma síncrona y uno a la vez antes de
+# volver a correr el script de arriba a abajo, así que no hay dos clics
+# modificando este contador al mismo tiempo dentro de una misma sesión.
+if "hid_counter" not in st.session_state:
+    st.session_state.hid_counter = 1
+for _h in st.session_state.habitaciones:          # backfill por si vienen de
+    if "hid" not in _h:                           # una sesión/versión vieja
+        _h["hid"] = st.session_state.hid_counter
+        st.session_state.hid_counter += 1
+
 def _next_hid():
-    if "hid_counter" not in st.session_state:
-        for j, h in enumerate(st.session_state.habitaciones):
-            if "hid" not in h:
-                h["hid"] = j + 1
-        st.session_state.hid_counter = len(st.session_state.habitaciones) + 1
     hid = st.session_state.hid_counter
     st.session_state.hid_counter += 1
     return hid
@@ -1007,16 +1065,6 @@ def eliminar(hid):
     st.session_state.habitaciones = [
         h for h in st.session_state.habitaciones if h.get("hid") != hid
     ]
-
-if "hid_counter" not in st.session_state:
-    st.session_state.hid_counter = 1
-_max_hid = 0
-for _h in st.session_state.habitaciones:
-    if "hid" not in _h:
-        _h["hid"] = st.session_state.hid_counter
-        st.session_state.hid_counter += 1
-    _max_hid = max(_max_hid, _h["hid"])
-st.session_state.hid_counter = max(st.session_state.hid_counter, _max_hid + 1)
 
 for i, hab in enumerate(st.session_state.habitaciones):
     color    = HAB_COLORS[i%len(HAB_COLORS)]
@@ -1091,8 +1139,11 @@ for i, hab in enumerate(st.session_state.habitaciones):
                             hab["largo_reducido"], hab["ancho_reducido"],
                             color, hab.get("esquina","inf_izq"))
                         st.markdown(svg_l, unsafe_allow_html=True)
-                    except Exception:
-                        pass
+                    except (ZeroDivisionError, ValueError, KeyError) as e:
+                        # Pasa mientras el usuario está tipeando una medida a
+                        # medio completar (ej. borró el 0 de "0.1"); no vale
+                        # la pena interrumpir con un error rojo por eso.
+                        st.caption(f"⏳ Dibujo no disponible con estos valores ({e}).")
             else:
                 c1,c2,c3,c4,c5,c6,c7 = st.columns([2.2,1.2,1.2,1.2,1.6,1.4,0.5])
                 with c1:
@@ -1265,6 +1316,13 @@ m2_desperdiciados = max(0.0, (metros_comp - metros_us) * PW)
 m2_borde          = max(0.0, m2_aprovechados - total_area)   # informativo
 pct_desp = (m2_desperdiciados / m2_comprados * 100) if m2_comprados > 0 else 0
 
+# Métrica estricta (solo para auditoría, NO es la que se muestra como
+# principal): si se contara TAMBIÉN el borde de la última fila como material
+# perdido, el desperdicio real de obra sería este. Criterio de negocio
+# vigente: el borde NO cuenta como desperdicio (decisión explícita, no bug).
+m2_desperdicio_estricto = max(0.0, m2_comprados - total_area)
+pct_desp_estricto = (m2_desperdicio_estricto / m2_comprados * 100) if m2_comprados > 0 else 0
+
 tot_h_perfiles = sum(h["n_h"] for h in hab_info)          # líneas de unión
 tot_h_varillas = sum(h["varillas_h"] for h in hab_info)    # varillas de 4 m
 
@@ -1293,6 +1351,9 @@ costo_total  = (costo_placas + costo_h + tot_mol*pperim + tot_sol*psol +
 # MÉTRICAS
 # ═══════════════════════════════════════════════════════════════════════════
 
+for _aviso in AVISOS:
+    st.warning(f"⚠️ {_aviso}")
+
 st.subheader("📊 Resumen")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
@@ -1309,7 +1370,11 @@ ca.metric("✅ m² aprovechados",     f"{m2_aprovechados:.2f} m²",
           help=f"Incluye {m2_borde:.2f} m² de borde (última fila usada solo en "
                f"parte del ancho), que no se cuenta como desperdicio.")
 cb.metric("❌ m² desperdicio",      f"{m2_desperdiciados:.2f} m²",
-          delta=f"-{pct_desp:.1f}%", delta_color="inverse")
+          delta=f"-{pct_desp:.1f}%", delta_color="inverse",
+          help=f"Criterio vigente: no cuenta el borde de la última fila. Si se "
+               f"contara TAMBIÉN ese borde como material perdido (criterio "
+               f"estricto de auditoría), el desperdicio sería "
+               f"{m2_desperdicio_estricto:.2f} m² ({pct_desp_estricto:.1f}%).")
 cc.metric("📦 m² comprados",        f"{m2_comprados:.2f} m²")
 cd.metric("🔩 Tornillos T1",        f"{tot_t1} un.")
 ce.metric("🔧 Tornillos T2",        f"{tot_t2} un.")
