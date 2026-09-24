@@ -1,7 +1,9 @@
 import streamlit as st
 import math
+import json
+import urllib.parse
 import pandas as pd
-from datetime import date
+from datetime import date, datetime
 import io
 import os
 from collections import Counter, defaultdict
@@ -845,7 +847,8 @@ def _dibujar_marca_de_agua(pdf_canvas, doc):
     pdf_canvas.setFillColor(DARK_GRAY)
     pdf_canvas.drawCentredString(
         x_centro, 1.60 * cm,
-        "La determinación de las medidas y cantidades reales de materiales a utilizar es de responsabilidad exclusiva del instalador ")
+        "Las medidas y cantidades reales de materiales pueden variar según lo "
+        "que el instalador verifique en obra.")
     pdf_canvas.drawCentredString(
         x_centro, 1.20 * cm,
         "LAUTHARTE MATERIALES no se responsabiliza por diferencias entre este "
@@ -858,7 +861,7 @@ def _dibujar_marca_de_agua(pdf_canvas, doc):
     pdf_canvas.setFillColor(DARK_GRAY)
     pdf_canvas.drawCentredString(
         x_centro, 0.65 * cm,
-        f"  ·  WhatsApp {WHATSAPP_LAUTHARTE}  ·  "
+        f"LAUTHARTE MATERIALES  ·  WhatsApp {WHATSAPP_LAUTHARTE}  ·  "
         f"Documento de uso exclusivo del cliente — no reproducir ni reutilizar sin autorización"
     )
     pdf_canvas.restoreState()
@@ -1077,6 +1080,95 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     return pdf_bytes
 
 # ═══════════════════════════════════════════════════════════════════════════
+# HISTORIAL EN GOOGLE SHEETS
+# ═══════════════════════════════════════════════════════════════════════════
+# Streamlit Cloud no tiene disco persistente (cualquier archivo que la app
+# escriba se pierde en el próximo reinicio), así que el historial de
+# presupuestos vive en una Google Sheet propia en vez de en un archivo local.
+# Requiere, en Settings → Secrets de la app:
+#   gsheet_id = "<ID de la planilla, la parte de la URL entre /d/ y /edit>"
+#   [gcp_service_account]
+#   type = "service_account"
+#   ...el resto de las claves del JSON que te da Google Cloud al crear la
+#   cuenta de servicio (client_email, private_key, etc.)...
+# Y hay que compartir esa Google Sheet (permiso Editor) con el "client_email"
+# de la cuenta de servicio. Sin esa configuración, el historial queda
+# desactivado pero el resto de la app sigue funcionando normal.
+HISTORIAL_ENCABEZADO = ["Fecha", "Hora", "Cliente", "WhatsApp cliente",
+                        "Obra / Descripción", "Área total (m²)", "Mezcla de placas",
+                        "Perimetrales", "Costo total", "Habitaciones (JSON)"]
+
+
+def _gsheet_worksheet():
+    """
+    Devuelve (worksheet, None) si el historial está configurado y accesible,
+    o (None, "motivo") si falta algo — nunca lanza una excepción hacia
+    afuera, para que un problema de configuración no rompa el resto de la app.
+    """
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+    except ImportError:
+        return None, ("falta instalar `gspread` y `google-auth` "
+                      "(agregalos a requirements.txt)")
+
+    creds_info = st.secrets.get("gcp_service_account")
+    sheet_id   = st.secrets.get("gsheet_id")
+    if not creds_info or not sheet_id:
+        return None, ("falta configurar `gsheet_id` y `[gcp_service_account]` "
+                      "en Settings → Secrets de la app")
+
+    try:
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds  = Credentials.from_service_account_info(dict(creds_info), scopes=scopes)
+        gc     = gspread.authorize(creds)
+        sh     = gc.open_by_key(sheet_id)
+        ws     = sh.sheet1
+        if ws.row_count == 0 or not ws.row_values(1):
+            ws.append_row(HISTORIAL_ENCABEZADO, value_input_option="USER_ENTERED")
+        return ws, None
+    except Exception as e:
+        return None, f"no se pudo conectar con Google Sheets ({e})"
+
+
+def guardar_presupuesto_en_historial(habs, cliente, whatsapp_cliente, descripcion,
+                                     total_area, desc_mix, tot_mol, costo_total):
+    """Agrega una fila al historial. Devuelve (ok: bool, mensaje: str)."""
+    ws, motivo = _gsheet_worksheet()
+    if ws is None:
+        return False, f"No se guardó en el historial: {motivo}."
+    fila = [
+        date.today().strftime("%d/%m/%Y"),
+        datetime.now().strftime("%H:%M"),
+        cliente or "",
+        whatsapp_cliente or "",
+        descripcion or "",
+        f"{total_area:.2f}",
+        desc_mix,
+        str(tot_mol),
+        f"{costo_total:.0f}" if costo_total > 0 else "",
+        json.dumps(habs, ensure_ascii=False),
+    ]
+    try:
+        ws.append_row(fila, value_input_option="USER_ENTERED")
+        return True, "Presupuesto guardado en el historial."
+    except Exception as e:
+        return False, f"No se guardó en el historial: {e}"
+
+
+def listar_historial(limite=40):
+    """Últimos presupuestos guardados, más reciente primero. (filas, motivo)."""
+    ws, motivo = _gsheet_worksheet()
+    if ws is None:
+        return [], motivo
+    try:
+        registros = ws.get_all_values()[1:]          # sin encabezado
+        registros = [r for r in registros if r]       # descarta filas vacías
+        return list(reversed(registros[-limite:])), None
+    except Exception as e:
+        return [], f"no se pudo leer el historial ({e})"
+
+# ═══════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1113,6 +1205,31 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════════════════
 # HABITACIONES
 # ═══════════════════════════════════════════════════════════════════════════
+
+with st.expander("📂 Historial de presupuestos (Google Sheets)"):
+    registros, motivo_historial = listar_historial()
+    if motivo_historial:
+        st.caption(f"Historial no disponible: {motivo_historial}.")
+    elif not registros:
+        st.caption("Todavía no hay presupuestos guardados en el historial.")
+    else:
+        opciones = {
+            f"{r[0]} {r[1]} · {r[2] or 'sin cliente'} · {r[4] or 'sin descripción'} · {r[5]} m²": r
+            for r in registros
+        }
+        elegido = st.selectbox("Elegí un presupuesto para volver a abrirlo",
+                               options=list(opciones.keys()), key="hist_select")
+        if st.button("📂 Cargar este presupuesto", key="hist_cargar"):
+            fila = opciones[elegido]
+            try:
+                habs_cargadas = json.loads(fila[9])
+                st.session_state.habitaciones = habs_cargadas
+                st.session_state.hid_counter = max(
+                    (h.get("hid", 0) for h in habs_cargadas), default=0) + 1
+                st.success("Presupuesto cargado.")
+                st.rerun()
+            except (json.JSONDecodeError, IndexError, KeyError) as e:
+                st.error(f"No se pudo leer ese registro del historial ({e}).")
 
 st.subheader("📐 Habitaciones")
 
@@ -1647,30 +1764,112 @@ for h in hab_info:
 st.dataframe(pd.DataFrame(filas_plac), use_container_width=True, hide_index=True)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PDF
+# LISTA DE MATERIALES PARA COPIAR
+# ═══════════════════════════════════════════════════════════════════════════
+
+st.subheader("📋 Lista de materiales (para copiar)")
+
+items_materiales = []
+for _L in (4, 5, 6):
+    if conteo[_L] > 0:
+        items_materiales.append((f"Placas PVC {_L} m", conteo[_L]))
+items_materiales.append(("Perimetrales PVC 4 m", tot_mol))
+items_materiales.append(("Soleras 2.6 m", tot_sol))
+items_materiales.append(("Montantes 2.6 m", tot_mon))
+items_materiales.append(("Tarugos N°8", tot_tar))
+items_materiales.append(("Tornillos T1 (placas)", tot_t1))
+items_materiales.append(("Tornillos T2 (perfiles)", tot_t2))
+if tot_h_varillas > 0:
+    items_materiales.append(("Varillas perfil H 4 m", tot_h_varillas))
+
+st.dataframe(pd.DataFrame(items_materiales, columns=["Ítem", "Cantidad"]),
+            use_container_width=True, hide_index=True)
+
+col_mat1, col_mat2 = st.columns(2)
+with col_mat1:
+    st.caption("Solo cantidades — una por línea, en el mismo orden de la tabla. "
+              "Pasá el mouse por el bloque y tocá el ícono de copiar.")
+    st.code("\n".join(str(c) for _, c in items_materiales), language=None)
+with col_mat2:
+    st.caption("Ítem + cantidad separados por tabulador — al pegar en Excel/Sheets "
+              "entran directo en dos columnas.")
+    st.code("\n".join(f"{i}\t{c}" for i, c in items_materiales), language=None)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PDF, WHATSAPP E HISTORIAL
 # ═══════════════════════════════════════════════════════════════════════════
 
 st.divider()
-st.subheader("📄 Generar reporte PDF")
+st.subheader("📄 Generar presupuesto")
 
-descripcion = st.text_input("Obra / Descripción (opcional)",
-                             placeholder="Ej: Casa González — Tucumán 123")
+col_desc, col_cli, col_wpp = st.columns(3)
+with col_desc:
+    descripcion = st.text_input("Obra / Descripción (opcional)",
+                                placeholder="Ej: Casa González — Tucumán 123")
+with col_cli:
+    cliente_nombre = st.text_input("Cliente (opcional)", placeholder="Ej: Juan Pérez")
+with col_wpp:
+    cliente_whatsapp = st.text_input(
+        "WhatsApp del cliente (opcional)", placeholder="3764xxxxxx (sin 0 ni 15)",
+        help="Solo se usa para armar el link de WhatsApp de este presupuesto — no se guarda "
+             "en ningún lado más que en el historial, si elegís guardarlo ahí.")
 
-if st.button("📥 Generar PDF", type="primary"):
-    with st.spinner("Generando PDF..."):
-        pdf_bytes = generar_pdf(
-            habs, hab_info, plan, todas_piezas,
-            total_area, tot_sol, tot_mon, tot_mol, tot_tar,
-            tot_t1, tot_t2, tot_h_perfiles, tot_h_varillas,
-            m2_comprados, m2_desperdiciados, pct_desp,
-            conteo, costo_total, estructuras, descripcion,
+col_pdf, col_hist, col_wa = st.columns(3)
+
+with col_pdf:
+    if st.button("📥 Generar PDF", type="primary"):
+        with st.spinner("Generando PDF..."):
+            pdf_bytes = generar_pdf(
+                habs, hab_info, plan, todas_piezas,
+                total_area, tot_sol, tot_mon, tot_mol, tot_tar,
+                tot_t1, tot_t2, tot_h_perfiles, tot_h_varillas,
+                m2_comprados, m2_desperdiciados, pct_desp,
+                conteo, costo_total, estructuras, descripcion,
+            )
+        st.session_state["_ultimo_pdf"] = pdf_bytes
+    if "_ultimo_pdf" in st.session_state:
+        st.download_button(
+            label="⬇️ Descargar PDF",
+            data=st.session_state["_ultimo_pdf"],
+            file_name=f"plan_corte_{date.today().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
         )
-    st.download_button(
-        label="⬇️ Descargar PDF",
-        data=pdf_bytes,
-        file_name=f"plan_corte_{date.today().strftime('%Y%m%d')}.pdf",
-        mime="application/pdf",
-    )
+
+with col_hist:
+    if st.button("💾 Guardar en historial"):
+        ok, msg = guardar_presupuesto_en_historial(
+            habs, cliente_nombre, cliente_whatsapp, descripcion,
+            total_area, desc_mix, tot_mol, costo_total)
+        (st.success if ok else st.warning)(msg)
+
+with col_wa:
+    _digitos = "".join(ch for ch in cliente_whatsapp if ch.isdigit()) if cliente_whatsapp else ""
+    if _digitos:
+        if _digitos.startswith("54"):
+            _resto = _digitos[2:]
+            _numero_wa = "54" + (_resto if _resto.startswith("9") else "9" + _resto)
+        else:
+            _sin_0 = _digitos[1:] if _digitos.startswith("0") else _digitos
+            _numero_wa = "549" + _sin_0
+
+        _lineas_msg = [f"Hola{f' {cliente_nombre}' if cliente_nombre else ''}, "
+                       f"te paso el presupuesto de LAUTHARTE:",
+                       f"- {total_area:.2f} m² de cielorraso",
+                       f"- Placas: {desc_mix}"]
+        if tot_mol > 0:
+            _lineas_msg.append(f"- Perimetrales: {tot_mol} un.")
+        if costo_total > 0:
+            _lineas_msg.append(f"- Total estimado: ${costo_total:,.0f}")
+        _lineas_msg.append("Cualquier consulta, escribime.")
+        _mensaje_wa = "\n".join(_lineas_msg)
+
+        st.link_button(
+            "📲 Abrir WhatsApp con el mensaje listo",
+            f"https://wa.me/{_numero_wa}?text={urllib.parse.quote(_mensaje_wa)}")
+        st.caption("Se abre el chat con el texto ya escrito — el PDF lo adjuntás vos a mano "
+                  "una vez descargado; WhatsApp no permite adjuntarlo automáticamente desde acá.")
+    else:
+        st.caption("Cargá el WhatsApp del cliente arriba para habilitar este botón.")
 
 st.caption("Motor: optimización exacta global (ILP por patrones) con respaldo heurístico. "
            "Perfil H: tiras largas partidas en tramos de placa máxima; también en ambientes en L. "
