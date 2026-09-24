@@ -32,6 +32,15 @@ LIGHT_GRAY = colors.HexColor("#F3F4F6")
 MID_GRAY   = colors.HexColor("#D1D5DB")
 DARK_GRAY  = colors.HexColor("#374151")
 
+WHATSAPP_LAUTHARTE = "376 4840047"
+# Contraseña opcional para bloquear edición/copia del PDF (ver PROTEGER_PDF
+# más abajo). Dejalo en None para no pedir contraseña al abrir — igual queda
+# protegida la edición/copia — o poné una clave de USUARIO si además querés
+# que haga falta contraseña para simplemente ABRIR el archivo.
+PDF_PASSWORD_EDICION  = "lautharte2026"   # cambiá esto por tu propia clave
+PDF_PASSWORD_APERTURA = None
+PROTEGER_PDF          = False   # True = exige la contraseña para editar/copiar
+
 # ── Constantes fijas ────────────────────────────────────────────────────────
 PW              = 0.20   # ancho de placa — fijo 20 cm
 LARGO_PERFIL    = 2.60
@@ -62,6 +71,7 @@ AVISOS = []
 
 st.title("🏠 Presupuestador Cielorrasos PVC")
 st.caption("Optimización global de corte — mezcla de largos, perfiles H, colores por habitación")
+st.caption(f"📲 LAUTHARTE MATERIALES · WhatsApp {WHATSAPP_LAUTHARTE}")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # UTILIDADES
@@ -767,6 +777,21 @@ def texto_cortes_h(h):
         return " | ".join(partes)
     return " + ".join(f"{s}m" for s in h["segmentos"])
 
+
+def piezas_por_fila(h):
+    """
+    Lista [(medida_m, cantidad_filas), ...] con TODAS las medidas de placa
+    que necesita la habitación, ya partidas por perfil H si corresponde.
+    Es la fuente única para mostrar "medida × cantidad" en pantalla y en el
+    PDF: antes el PDF solo mostraba una medida (la más larga de la L) con el
+    total de filas, y las tiras cortas de una L quedaban sin figurar.
+    """
+    if h.get("tipo") == "l":
+        return [(s, g["filas"]) for g in h.get("grupos_h", []) for s in g["segs"]]
+    if h["n_h"] > 0:
+        return [(s, h["filas"]) for s in h["segmentos"]]
+    return [(h["dim_pieza"], h["filas"])]
+
 # ═══════════════════════════════════════════════════════════════════════════
 # PDF
 # ═══════════════════════════════════════════════════════════════════════════
@@ -784,6 +809,40 @@ def logo_imagen():
         return None
 
 
+def _dibujar_marca_de_agua(pdf_canvas, doc):
+    """
+    Se ejecuta automáticamente en CADA página del documento (onFirstPage /
+    onLaterPages), después de que ReportLab ya dibujó el contenido normal de
+    esa página. Dibuja:
+      1. El nombre de la empresa en diagonal, grande y translúcido, cruzando
+         toda la hoja — para que quede claro de un vistazo quién generó el
+         plan aunque alguien saque una foto de una sola página.
+      2. Un pie de página fijo con el WhatsApp de contacto y una leyenda de
+         uso exclusivo, para que quien reciba el PDF sepa a quién llamar.
+    """
+    pdf_canvas.saveState()
+    pdf_canvas.setFont("Helvetica-Bold", 42)
+    pdf_canvas.setFillColor(NAVY)
+    try:
+        pdf_canvas.setFillAlpha(0.07)   # ReportLab >= 3.x; si no existe, sigue sin transparencia
+    except AttributeError:
+        pass
+    pdf_canvas.translate(A4[0] / 2, A4[1] / 2)
+    pdf_canvas.rotate(38)
+    pdf_canvas.drawCentredString(0, 0, "LAUTHARTE MATERIALES")
+    pdf_canvas.restoreState()
+
+    pdf_canvas.saveState()
+    pdf_canvas.setFont("Helvetica", 7)
+    pdf_canvas.setFillColor(DARK_GRAY)
+    pdf_canvas.drawCentredString(
+        A4[0] / 2, 1.1 * cm,
+        f"LAUTHARTE MATERIALES  ·  WhatsApp {WHATSAPP_LAUTHARTE}  ·  "
+        f"Documento de uso exclusivo del cliente — no reproducir ni reutilizar sin autorización"
+    )
+    pdf_canvas.restoreState()
+
+
 def generar_pdf(habs, hab_info, plan, todas_piezas,
                 total_area, tot_sol, tot_mon, tot_mol, tot_tar,
                 tot_t1, tot_t2, tot_h_perfiles, tot_h_varillas,
@@ -799,6 +858,7 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     s_sub    = ParagraphStyle("s", fontSize=9,  textColor=NAVY, fontName="Helvetica-Bold", spaceBefore=8, spaceAfter=3)
     s_body   = ParagraphStyle("b", fontSize=8,  textColor=DARK_GRAY, fontName="Helvetica", spaceAfter=2)
     s_footer = ParagraphStyle("f", fontSize=7.5, textColor=DARK_GRAY, fontName="Helvetica-Oblique", alignment=TA_CENTER)
+
 
     story = []
     W     = A4[0] - 3.6*cm
@@ -883,18 +943,24 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     story.append(Paragraph("DETALLE DE PLACAS PVC POR HABITACIÓN", s_sub))
     s_ph = ParagraphStyle("ph", fontSize=7.5, textColor=colors.white,
                           fontName="Helvetica-Bold", leading=9, alignment=TA_CENTER)
+    s_pc = ParagraphStyle("pc", fontSize=7.5, textColor=DARK_GRAY,
+                          fontName="Helvetica", leading=10, alignment=TA_CENTER)
     def _ph(txt):
         return Paragraph(txt.replace(" ", "<br/>", 1), s_ph)
-    ph = [_ph("Habitación"), _ph("Área (m²)"), _ph("Dirección"), _ph("Medida placa"),
-          _ph("Cantidad placas"), _ph("Perím."), _ph("Uniones H"), _ph("Varillas H (4m)")]
+    ph = [_ph("Habitación"), _ph("Área (m²)"), _ph("Dirección"), _ph("Corte por fila"),
+          _ph("Perím."), _ph("Uniones H"), _ph("Varillas H (4m)")]
     prows = [ph]
     for h in hab_info:
         dir_ = ("→ largo" if h["orient"]=="largo" else "↓ ancho")+(" (fijo)" if h.get("fijo") else "")
-        prows.append([h["nombre"], f"{hab_area(h):.2f}", dir_,
-                      f"{h['dim_pieza']}m", str(h["filas"]), f"{hab_perim(h):.1f}",
+        # Todas las medidas de placa de la habitación, una por línea, con su
+        # cantidad de filas — para una L esto incluye tanto el tramo largo
+        # como el corto, no solo el más largo.
+        corte_txt = "<br/>".join(f"{d}m × {n}" for d, n in piezas_por_fila(h))
+        prows.append([h["nombre"], f"{hab_area(h):.2f}", dir_, Paragraph(corte_txt, s_pc),
+                      f"{hab_perim(h):.1f}",
                       str(h["n_h"]) if h["n_h"]>0 else "—",
                       str(h["varillas_h"]) if h["n_h"]>0 else "—"])
-    pw2 = [W*0.16,W*0.09,W*0.15,W*0.11,W*0.10,W*0.09,W*0.12,W*0.18]
+    pw2 = [W*0.16,W*0.09,W*0.15,W*0.21,W*0.09,W*0.12,W*0.18]
     t_plac = Table(prows, colWidths=pw2, repeatRows=1)
     t_plac.setStyle(TableStyle([
         ("BACKGROUND",(0,0),(-1,0),NAVY), ("TEXTCOLOR",(0,0),(-1,0),colors.white),
@@ -968,9 +1034,31 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     t_firma.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"BOTTOM"),("ALIGN",(1,0),(1,0),"RIGHT")]))
     story.append(t_firma)
 
-    doc.build(story)
+    doc.build(story, onFirstPage=_dibujar_marca_de_agua, onLaterPages=_dibujar_marca_de_agua)
     buf.seek(0)
-    return buf.read()
+    pdf_bytes = buf.read()
+
+    if PROTEGER_PDF:
+        # Reescribe el PDF ya armado agregándole restricciones de edición y
+        # copia (encriptación estándar de PDF). No hace falta contraseña
+        # para ABRIRLO ni imprimirlo si PDF_PASSWORD_APERTURA queda en None
+        # — solo para editarlo, copiar texto o extraer imágenes de él.
+        from pypdf import PdfReader, PdfWriter
+        from pypdf.constants import UserAccessPermissions as _Perm
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        writer = PdfWriter()
+        for page in reader.pages:
+            writer.add_page(page)
+        writer.encrypt(
+            user_password=PDF_PASSWORD_APERTURA or "",
+            owner_password=PDF_PASSWORD_EDICION,
+            permissions_flag=_Perm.PRINT | _Perm.PRINT_TO_REPRESENTATION,
+        )
+        out = io.BytesIO()
+        writer.write(out)
+        pdf_bytes = out.getvalue()
+
+    return pdf_bytes
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SIDEBAR
