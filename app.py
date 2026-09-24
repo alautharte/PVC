@@ -1,6 +1,7 @@
 import streamlit as st
 import math
 import json
+import unicodedata
 import urllib.parse
 import pandas as pd
 from datetime import date, datetime
@@ -1156,15 +1157,30 @@ def guardar_presupuesto_en_historial(habs, cliente, whatsapp_cliente, descripcio
         return False, f"No se guardó en el historial: {e}"
 
 
-def listar_historial(limite=40):
-    """Últimos presupuestos guardados, más reciente primero. (filas, motivo)."""
+def listar_historial(limite=100):
+    """
+    Últimas 'limite' cotizaciones guardadas, más reciente primero. (filas, motivo).
+
+    Lee solo lo necesario para que esto siga siendo rápido incluso con miles
+    de presupuestos guardados: primero pide nada más la columna A (una sola
+    columna, liviano) para saber cuántas filas hay en total, y después trae
+    de una sola vez únicamente el RANGO de las últimas 'limite' filas — nunca
+    la planilla entera.
+    """
     ws, motivo = _gsheet_worksheet()
     if ws is None:
         return [], motivo
     try:
-        registros = ws.get_all_values()[1:]          # sin encabezado
-        registros = [r for r in registros if r]       # descarta filas vacías
-        return list(reversed(registros[-limite:])), None
+        col_a = ws.col_values(1)          # solo columna Fecha: barato aunque haya miles de filas
+        total_filas = len(col_a) - 1      # sin contar el encabezado
+        if total_filas <= 0:
+            return [], None
+        fila_desde  = max(2, total_filas - limite + 2)
+        ultima_col  = chr(ord("A") + len(HISTORIAL_ENCABEZADO) - 1)   # "J" con 10 columnas
+        registros   = ws.get(f"A{fila_desde}:{ultima_col}{total_filas + 1}")
+        n_cols      = len(HISTORIAL_ENCABEZADO)
+        registros   = [r + [""] * (n_cols - len(r)) for r in registros if r]   # completa filas cortas
+        return list(reversed(registros)), None
     except Exception as e:
         return [], f"no se pudo leer el historial ({e})"
 
@@ -1207,15 +1223,40 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════════════════
 
 with st.expander("📂 Historial de presupuestos (Google Sheets)"):
-    registros, motivo_historial = listar_historial()
+    registros, motivo_historial = listar_historial()   # últimas 100, más reciente primero
     if motivo_historial:
         st.caption(f"Historial no disponible: {motivo_historial}.")
     elif not registros:
         st.caption("Todavía no hay presupuestos guardados en el historial.")
     else:
-        _mostrar = registros[:15]
-        if len(registros) > len(_mostrar):
-            st.caption(f"Mostrando los {len(_mostrar)} más recientes de {len(registros)}.")
+        busqueda = st.text_input(
+            "🔎 Buscar por nombre o teléfono",
+            placeholder="Ej: Juan Pérez, o 3764123456 (sin 0 ni 15)",
+            key="hist_busqueda")
+
+        if busqueda.strip():
+            def _sin_acentos(s):
+                return "".join(c for c in unicodedata.normalize("NFKD", s)
+                               if not unicodedata.combining(c))
+            _q_texto   = _sin_acentos(busqueda.strip().lower())
+            _q_digitos = "".join(ch for ch in busqueda if ch.isdigit())
+            def _coincide(r):
+                nombre_ok = _q_texto in _sin_acentos((r[2] or "").lower())
+                # compara solo dígitos: así da igual si al guardar el
+                # teléfono se tipeó con 0, con 15, con +54 9 o sin nada.
+                tel_digitos = "".join(ch for ch in (r[3] or "") if ch.isdigit())
+                tel_ok = bool(_q_digitos) and _q_digitos in tel_digitos
+                return nombre_ok or tel_ok
+            _resultados = [r for r in registros if _coincide(r)]
+            st.caption(f"{len(_resultados)} resultado(s) sobre las últimas {len(registros)} cotizaciones.")
+        else:
+            _resultados = registros
+            st.caption(f"Mostrando las últimas {len(registros)} cotizaciones. Escribí arriba para buscar.")
+
+        _mostrar = _resultados[:20]
+        if len(_resultados) > len(_mostrar):
+            st.caption(f"({len(_mostrar)} de {len(_resultados)} — afiná la búsqueda para ver menos)")
+
         # Un botón "Cargar" por fila, identificada por su POSICIÓN en la
         # lista (nunca por un texto armado) — así nunca se puede perder un
         # presupuesto por tener la misma fecha/cliente/área que otro.
@@ -1223,7 +1264,8 @@ with st.expander("📂 Historial de presupuestos (Google Sheets)"):
             _col_txt, _col_btn = st.columns([5, 1])
             with _col_txt:
                 st.markdown(
-                    f"**{_r[0]} {_r[1]}** · {_r[2] or 'sin cliente'} · "
+                    f"**{_r[0]} {_r[1]}** · {_r[2] or 'sin cliente'}"
+                    + (f" · {_r[3]}" if _r[3] else "") + " · "
                     f"{_r[4] or 'sin descripción'} · {_r[5]} m²")
             with _col_btn:
                 if st.button("📂 Cargar", key=f"hist_cargar_{_idx}"):
