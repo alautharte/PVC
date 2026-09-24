@@ -948,7 +948,7 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     def _ph(txt):
         return Paragraph(txt.replace(" ", "<br/>", 1), s_ph)
     ph = [_ph("Habitación"), _ph("Área (m²)"), _ph("Dirección"), _ph("Placas a usar"),
-          _ph("Perím."), _ph("Uniones H"), _ph("Varillas H (4m)")]
+          _ph("Perím. (m)"), _ph("Uniones H"), _ph("Varillas H (4m)")]
     prows = [ph]
     for h in hab_info:
         dir_ = ("→ largo" if h["orient"]=="largo" else "↓ ancho")+(" (fijo)" if h.get("fijo") else "")
