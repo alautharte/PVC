@@ -1213,23 +1213,29 @@ with st.expander("📂 Historial de presupuestos (Google Sheets)"):
     elif not registros:
         st.caption("Todavía no hay presupuestos guardados en el historial.")
     else:
-        opciones = {
-            f"{r[0]} {r[1]} · {r[2] or 'sin cliente'} · {r[4] or 'sin descripción'} · {r[5]} m²": r
-            for r in registros
-        }
-        elegido = st.selectbox("Elegí un presupuesto para volver a abrirlo",
-                               options=list(opciones.keys()), key="hist_select")
-        if st.button("📂 Cargar este presupuesto", key="hist_cargar"):
-            fila = opciones[elegido]
-            try:
-                habs_cargadas = json.loads(fila[9])
-                st.session_state.habitaciones = habs_cargadas
-                st.session_state.hid_counter = max(
-                    (h.get("hid", 0) for h in habs_cargadas), default=0) + 1
-                st.success("Presupuesto cargado.")
-                st.rerun()
-            except (json.JSONDecodeError, IndexError, KeyError) as e:
-                st.error(f"No se pudo leer ese registro del historial ({e}).")
+        _mostrar = registros[:15]
+        if len(registros) > len(_mostrar):
+            st.caption(f"Mostrando los {len(_mostrar)} más recientes de {len(registros)}.")
+        # Un botón "Cargar" por fila, identificada por su POSICIÓN en la
+        # lista (nunca por un texto armado) — así nunca se puede perder un
+        # presupuesto por tener la misma fecha/cliente/área que otro.
+        for _idx, _r in enumerate(_mostrar):
+            _col_txt, _col_btn = st.columns([5, 1])
+            with _col_txt:
+                st.markdown(
+                    f"**{_r[0]} {_r[1]}** · {_r[2] or 'sin cliente'} · "
+                    f"{_r[4] or 'sin descripción'} · {_r[5]} m²")
+            with _col_btn:
+                if st.button("📂 Cargar", key=f"hist_cargar_{_idx}"):
+                    try:
+                        habs_cargadas = json.loads(_r[9])
+                        st.session_state.habitaciones = habs_cargadas
+                        st.session_state.hid_counter = max(
+                            (h.get("hid", 0) for h in habs_cargadas), default=0) + 1
+                        st.success("Presupuesto cargado.")
+                        st.rerun()
+                    except (json.JSONDecodeError, IndexError, KeyError) as e:
+                        st.error(f"No se pudo leer ese registro del historial ({e}).")
 
 st.subheader("📐 Habitaciones")
 
