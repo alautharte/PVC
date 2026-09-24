@@ -845,7 +845,7 @@ def _dibujar_marca_de_agua(pdf_canvas, doc):
     pdf_canvas.setFillColor(DARK_GRAY)
     pdf_canvas.drawCentredString(
         x_centro, 1.60 * cm,
-        "La determinación de lass medidas y cantidades reales de materiales a utilizar es de responsabilidad exclusiva del instalador ")
+        "La determinación de las medidas y cantidades reales de materiales a utilizar es de responsabilidad exclusiva del instalador ")
     pdf_canvas.drawCentredString(
         x_centro, 1.20 * cm,
         "LAUTHARTE MATERIALES no se responsabiliza por diferencias entre este "
