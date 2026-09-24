@@ -5,6 +5,7 @@ import unicodedata
 import urllib.parse
 import pandas as pd
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 import io
 import os
 from collections import Counter, defaultdict
@@ -36,6 +37,14 @@ MID_GRAY   = colors.HexColor("#D1D5DB")
 DARK_GRAY  = colors.HexColor("#374151")
 
 WHATSAPP_LAUTHARTE = "376 4840047"
+
+# Streamlit Cloud corre en UTC: sin esto, la hora y la fecha salen corridas
+# 3 horas respecto de Argentina. Todo lo que muestre o guarde fecha/hora
+# tiene que usar ahora_ar() y NO date.today() / datetime.now().
+TZ_AR = ZoneInfo("America/Argentina/Buenos_Aires")
+
+def ahora_ar():
+    return datetime.now(TZ_AR)
 # Contraseña opcional para bloquear edición/copia del PDF (ver PROTEGER_PDF
 # más abajo). Dejalo en None para no pedir contraseña al abrir — igual queda
 # protegida la edición/copia — o poné una clave de USUARIO si además querés
@@ -886,7 +895,7 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
 
     story = []
     W     = A4[0] - 3.6*cm
-    fecha = date.today().strftime("%d/%m/%Y")
+    fecha = ahora_ar().strftime("%d/%m/%Y")
 
     logo_img = logo_imagen()
     if logo_img:
@@ -1139,8 +1148,8 @@ def guardar_presupuesto_en_historial(habs, cliente, whatsapp_cliente, descripcio
     if ws is None:
         return False, f"No se guardó en el historial: {motivo}."
     fila = [
-        date.today().strftime("%d/%m/%Y"),
-        datetime.now().strftime("%H:%M"),
+        ahora_ar().strftime("%d/%m/%Y"),
+        ahora_ar().strftime("%H:%M"),
         cliente or "",
         whatsapp_cliente or "",
         descripcion or "",
@@ -1909,7 +1918,7 @@ with col_pdf:
         st.download_button(
             label="⬇️ Descargar PDF",
             data=st.session_state["_ultimo_pdf"],
-            file_name=f"plan_corte_{date.today().strftime('%Y%m%d')}.pdf",
+            file_name=f"plan_corte_{ahora_ar().strftime('%Y%m%d')}.pdf",
             mime="application/pdf",
         )
 
