@@ -1222,6 +1222,36 @@ with st.sidebar:
 # HABITACIONES
 # ═══════════════════════════════════════════════════════════════════════════
 
+DEFAULT_HABITACIONES = [
+    {"hid":1,"nombre":"Habitación 1","largo":3.5,"ancho":4.0,"altura":0.30,"fijo":False,"forzar_h":False},
+    {"hid":2,"nombre":"Habitación 2","largo":2.5,"ancho":3.0,"altura":0.30,"fijo":False,"forzar_h":False},
+]
+
+col_nuevo, _col_resto = st.columns([1, 3])
+with col_nuevo:
+    if st.button("🆕 Nuevo presupuesto",
+                help="Borra las habitaciones cargadas y los datos del cliente para "
+                     "empezar uno nuevo, sin recargar la página."):
+        st.session_state["_confirmar_nuevo"] = True
+
+if st.session_state.get("_confirmar_nuevo"):
+    st.warning("Esto borra todas las habitaciones cargadas y los datos del cliente "
+              "(obra, nombre, WhatsApp). Lo que no hayas guardado se pierde. ¿Seguro?")
+    col_si, col_no, _col_resto2 = st.columns([1, 1, 3])
+    with col_si:
+        if st.button("Sí, empezar de cero", type="primary", key="nuevo_confirmar_si"):
+            st.session_state.habitaciones = [dict(h) for h in DEFAULT_HABITACIONES]
+            st.session_state.hid_counter  = 3
+            for _k in ("campo_descripcion", "campo_cliente_nombre",
+                      "campo_cliente_whatsapp", "_ultimo_pdf", "hist_busqueda"):
+                st.session_state.pop(_k, None)
+            st.session_state.pop("_confirmar_nuevo", None)
+            st.rerun()
+    with col_no:
+        if st.button("Cancelar", key="nuevo_confirmar_no"):
+            st.session_state.pop("_confirmar_nuevo", None)
+            st.rerun()
+
 with st.expander("📂 Historial de presupuestos (Google Sheets)"):
     registros, motivo_historial = listar_historial()   # últimas 100, más reciente primero
     if motivo_historial:
@@ -1282,10 +1312,7 @@ with st.expander("📂 Historial de presupuestos (Google Sheets)"):
 st.subheader("📐 Habitaciones")
 
 if "habitaciones" not in st.session_state:
-    st.session_state.habitaciones = [
-        {"hid":1,"nombre":"Habitación 1","largo":3.5,"ancho":4.0,"altura":0.30,"fijo":False,"forzar_h":False},
-        {"hid":2,"nombre":"Habitación 2","largo":2.5,"ancho":3.0,"altura":0.30,"fijo":False,"forzar_h":False},
-    ]
+    st.session_state.habitaciones = [dict(h) for h in DEFAULT_HABITACIONES]
     st.session_state.hid_counter = 3
 
 # hid_counter es la única fuente de verdad para asignar IDs de habitación:
@@ -1853,14 +1880,17 @@ st.subheader("📄 Generar presupuesto")
 col_desc, col_cli, col_wpp = st.columns(3)
 with col_desc:
     descripcion = st.text_input("Obra / Descripción (opcional)",
-                                placeholder="Ej: Casa González — Tucumán 123")
+                                placeholder="Ej: Casa González — Tucumán 123",
+                                key="campo_descripcion")
 with col_cli:
-    cliente_nombre = st.text_input("Cliente (opcional)", placeholder="Ej: Juan Pérez")
+    cliente_nombre = st.text_input("Cliente (opcional)", placeholder="Ej: Juan Pérez",
+                                   key="campo_cliente_nombre")
 with col_wpp:
     cliente_whatsapp = st.text_input(
         "WhatsApp del cliente (opcional)", placeholder="3764xxxxxx (sin 0 ni 15)",
         help="Solo se usa para armar el link de WhatsApp de este presupuesto — no se guarda "
-             "en ningún lado más que en el historial, si elegís guardarlo ahí.")
+             "en ningún lado más que en el historial, si elegís guardarlo ahí.",
+        key="campo_cliente_whatsapp")
 
 col_pdf, col_hist, col_wa = st.columns(3)
 
