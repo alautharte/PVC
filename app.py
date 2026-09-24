@@ -947,7 +947,7 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
                           fontName="Helvetica", leading=10, alignment=TA_CENTER)
     def _ph(txt):
         return Paragraph(txt.replace(" ", "<br/>", 1), s_ph)
-    ph = [_ph("Habitación"), _ph("Área (m²)"), _ph("Dirección"), _ph("Corte por fila"),
+    ph = [_ph("Habitación"), _ph("Área (m²)"), _ph("Dirección"), _ph("Placas a usar"),
           _ph("Perím."), _ph("Uniones H"), _ph("Varillas H (4m)")]
     prows = [ph]
     for h in hab_info:
@@ -955,7 +955,7 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
         # Todas las medidas de placa de la habitación, una por línea, con su
         # cantidad de filas — para una L esto incluye tanto el tramo largo
         # como el corto, no solo el más largo.
-        corte_txt = "<br/>".join(f"{d}m × {n}" for d, n in piezas_por_fila(h))
+        corte_txt = "<br/>".join(f"{n} de {d}m" for d, n in piezas_por_fila(h))
         prows.append([h["nombre"], f"{hab_area(h):.2f}", dir_, Paragraph(corte_txt, s_pc),
                       f"{hab_perim(h):.1f}",
                       str(h["n_h"]) if h["n_h"]>0 else "—",
