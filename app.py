@@ -817,8 +817,9 @@ def _dibujar_marca_de_agua(pdf_canvas, doc):
       1. El nombre de la empresa en diagonal, grande y translúcido, cruzando
          toda la hoja — para que quede claro de un vistazo quién generó el
          plan aunque alguien saque una foto de una sola página.
-      2. Un pie de página fijo con el WhatsApp de contacto y una leyenda de
-         uso exclusivo, para que quien reciba el PDF sepa a quién llamar.
+      2. Un pie de página fijo, en TODAS las hojas, con la salvedad de
+         responsabilidad (bien visible, no es letra chica) seguida del
+         WhatsApp de contacto y la leyenda de uso exclusivo.
     """
     pdf_canvas.saveState()
     pdf_canvas.setFont("Helvetica-Bold", 42)
@@ -832,11 +833,32 @@ def _dibujar_marca_de_agua(pdf_canvas, doc):
     pdf_canvas.drawCentredString(0, 0, "LAUTHARTE MATERIALES")
     pdf_canvas.restoreState()
 
+    x_centro = A4[0] / 2
+
+    # Salvedad de responsabilidad — la parte que tiene que notarse, no letra
+    # chica: título corto en negrita más grande, y debajo el texto completo.
+    pdf_canvas.saveState()
+    pdf_canvas.setFont("Helvetica-Bold", 8.5)
+    pdf_canvas.setFillColor(NAVY)
+    pdf_canvas.drawCentredString(x_centro, 2.05 * cm, "AVISO — CÁLCULO ESTIMADO GENERADO POR SISTEMA")
+    pdf_canvas.setFont("Helvetica-Bold", 7.5)
+    pdf_canvas.setFillColor(DARK_GRAY)
+    pdf_canvas.drawCentredString(
+        x_centro, 1.60 * cm,
+        "Las medidas y cantidades reales de materiales pueden variar según lo "
+        "que el instalador verifique en obra.")
+    pdf_canvas.drawCentredString(
+        x_centro, 1.20 * cm,
+        "LAUTHARTE MATERIALES no se responsabiliza por diferencias entre este "
+        "cálculo y la obra real.")
+    pdf_canvas.restoreState()
+
+    # Línea de contacto, más chica y discreta, debajo de la salvedad.
     pdf_canvas.saveState()
     pdf_canvas.setFont("Helvetica", 7)
     pdf_canvas.setFillColor(DARK_GRAY)
     pdf_canvas.drawCentredString(
-        A4[0] / 2, 1.1 * cm,
+        x_centro, 0.65 * cm,
         f"LAUTHARTE MATERIALES  ·  WhatsApp {WHATSAPP_LAUTHARTE}  ·  "
         f"Documento de uso exclusivo del cliente — no reproducir ni reutilizar sin autorización"
     )
@@ -852,12 +874,11 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
                             leftMargin=1.8*cm, rightMargin=1.8*cm,
-                            topMargin=1.5*cm,  bottomMargin=2.2*cm)
+                            topMargin=1.5*cm,  bottomMargin=2.8*cm)
 
     s_title  = ParagraphStyle("t", fontSize=14, textColor=NAVY, fontName="Helvetica-Bold", spaceAfter=2)
     s_sub    = ParagraphStyle("s", fontSize=9,  textColor=NAVY, fontName="Helvetica-Bold", spaceBefore=8, spaceAfter=3)
     s_body   = ParagraphStyle("b", fontSize=8,  textColor=DARK_GRAY, fontName="Helvetica", spaceAfter=2)
-    s_footer = ParagraphStyle("f", fontSize=7.5, textColor=DARK_GRAY, fontName="Helvetica-Oblique", alignment=TA_CENTER)
 
 
     story = []
@@ -1029,15 +1050,6 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
             ("LEFTPADDING",   (2,0),(2,-1),  4),
         ]))
         story += [t_c, Spacer(1,4)]
-
-    story += [Spacer(1,10), HRFlowable(width="100%", thickness=0.8, color=MID_GRAY, spaceAfter=6)]
-    t_firma = Table([[
-        Paragraph(f"Este plan de corte fue generado el {fecha}. "
-                  "El cliente recibió y aceptó las instrucciones.", s_footer),
-        Paragraph("Firma del cliente: ____________________________", s_footer),
-    ]], colWidths=[W*0.6,W*0.4])
-    t_firma.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"BOTTOM"),("ALIGN",(1,0),(1,0),"RIGHT")]))
-    story.append(t_firma)
 
     doc.build(story, onFirstPage=_dibujar_marca_de_agua, onLaterPages=_dibujar_marca_de_agua)
     buf.seek(0)
