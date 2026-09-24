@@ -889,7 +889,7 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
         ["Área total","Placas PVC","m² comprados","m² desperdicio","Desperdicio %"],
         [f"{total_area:.2f} m²", desc_mix, f"{m2_comprados:.2f} m²",
          f"{m2_desperdiciados:.2f} m²", f"{pct_desp:.1f}%"],
-        ["Soleras (2.6m)","Montantes (2.6m)","Molduras PVC (4m)","Tarugos N°8","Perfiles H"],
+        ["Soleras (2.6m)","Montantes (2.6m)","Perimetrales PVC (4m)","Tarugos N°8","Perfiles H"],
         [f"{tot_sol} un.", f"{tot_mon} un.", f"{tot_mol} un.", f"{tot_tar} un.", h_txt],
         ["T1 placas","T2 perfiles","","",""],
         [f"{tot_t1} un.", f"{tot_t2} un.","","",""],
@@ -919,11 +919,11 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
 
     story.append(Paragraph("DETALLE DE ESTRUCTURA POR HABITACIÓN", s_sub))
     story.append(Paragraph(
-        "La columna \"Molduras\" es el requerimiento de cada habitación por separado. "
+        "La columna \"Perimetrales\" es el requerimiento de cada habitación por separado. "
         "El total de la obra (ver Resumen) se calcula sobre el perímetro conjunto, "
-        "porque el sobrante de la moldura de una habitación se usa en la siguiente.",
+        "porque el sobrante del perimetral de una habitación se usa en la siguiente.",
         s_body))
-    eh = ["Habitación","Dim.","Alt.","Soleras","Montantes","Molduras","Tarugos","Perf. H","T1","T2"]
+    eh = ["Habitación","Dim.","Alt.","Soleras","Montantes","Perimetrales","Tarugos","Perf. H","T1","T2"]
     erows = [eh]
     for hi in hab_info:
         e = estructuras[hi["idx"]]
@@ -1087,7 +1087,7 @@ with st.sidebar:
     p5       = st.number_input("Placa 5 m ($ / un)",            value=0.0, step=100.0, format="%.0f")
     p6       = st.number_input("Placa 6 m ($ / un)",            value=0.0, step=100.0, format="%.0f")
     p_h      = st.number_input("Perfil H ($ / un)",             value=0.0, step=100.0, format="%.0f")
-    pperim   = st.number_input("Moldura PVC ($ / un)",           value=0.0, step=100.0, format="%.0f")
+    pperim   = st.number_input("Perimetral PVC ($ / un)",         value=0.0, step=100.0, format="%.0f")
     psol     = st.number_input("Solera ($ / un)",                value=0.0, step=100.0, format="%.0f")
     pmont    = st.number_input("Montante ($ / un)",              value=0.0, step=100.0, format="%.0f")
     ptarug   = st.number_input("Tarugo N°8 ($ / un)",            value=0.0, step=10.0,  format="%.0f")
@@ -1464,9 +1464,9 @@ c1.metric("Área total",        f"{total_area:.2f} m²")
 c2.metric("Placas PVC",        f"{total_placas} un.")
 c3.metric("Soleras (2.6m)",    f"{tot_sol} un.")
 c4.metric("Montantes (2.6m)",  f"{tot_mon} un.")
-c5.metric("Molduras PVC (4m)", f"{tot_mol} un.",
+c5.metric("Perimetrales PVC (4m)", f"{tot_mol} un.",
           help=f"Calculado sobre el perímetro TOTAL de la obra ({total_perim:.1f} m), "
-               f"no habitación por habitación: el sobrante de la moldura de una "
+               f"no habitación por habitación: el sobrante del perimetral de una "
                f"habitación se aprovecha para la siguiente.")
 c6.metric("Tarugos N°8",       f"{tot_tar} un.")
 
@@ -1500,7 +1500,7 @@ st.info(f"**Mezcla óptima:** {desc_mix}{info_h}")
 # ═══════════════════════════════════════════════════════════════════════════
 
 st.subheader("🔧 Estructura por habitación")
-st.caption("La columna \"Molduras (por separado)\" es referencia de cuánta moldura "
+st.caption("La columna \"Perimetrales (por separado)\" es referencia de cuánto perimetral "
            "necesita CADA habitación sola. El total real a comprar es el del Resumen "
            "de arriba: se calcula sobre el perímetro conjunto de la obra, porque el "
            "sobrante de una habitación se puede usar en la siguiente.")
@@ -1515,7 +1515,7 @@ for h in hab_info:
         "Alt. susp.":   f"{h.get('altura',0.30):.2f}m",
         "Soleras":      e["total_soleras"],
         "Montantes":    e["total_montantes"],
-        "Molduras (por separado)": e["total_molduras"],
+        "Perimetrales (por separado)": e["total_molduras"],
         "Tarugos N°8":  e["total_tarugos_n8"],
         "Perfil H":     h_txt,
         "Torn. T1":     e["total_t1"],
