@@ -859,7 +859,7 @@ def _dibujar_marca_de_agua(pdf_canvas, doc):
     pdf_canvas.setFillColor(DARK_GRAY)
     pdf_canvas.drawCentredString(
         x_centro, 0.65 * cm,
-        f"LAUTHARTE MATERIALES  ·  WhatsApp {WHATSAPP_LAUTHARTE}  ·  "
+        f"  ·  WhatsApp {WHATSAPP_LAUTHARTE}  ·  "
         f"Documento de uso exclusivo del cliente — no reproducir ni reutilizar sin autorización"
     )
     pdf_canvas.restoreState()
