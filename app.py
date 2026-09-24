@@ -918,6 +918,11 @@ def generar_pdf(habs, hab_info, plan, todas_piezas,
     story += [t_res, Spacer(1,5)]
 
     story.append(Paragraph("DETALLE DE ESTRUCTURA POR HABITACIÓN", s_sub))
+    story.append(Paragraph(
+        "La columna \"Molduras\" es el requerimiento de cada habitación por separado. "
+        "El total de la obra (ver Resumen) se calcula sobre el perímetro conjunto, "
+        "porque el sobrante de la moldura de una habitación se usa en la siguiente.",
+        s_body))
     eh = ["Habitación","Dim.","Alt.","Soleras","Montantes","Molduras","Tarugos","Perf. H","T1","T2"]
     erows = [eh]
     for hi in hab_info:
@@ -1424,11 +1429,21 @@ for _h in hab_info:
 
 tot_sol  = sum(e["total_soleras"]    for e in estructuras.values())
 tot_mon  = sum(e["total_montantes"]  for e in estructuras.values())
-tot_mol  = sum(e["total_molduras"]   for e in estructuras.values())
 tot_tar  = sum(e["total_tarugos_n8"] for e in estructuras.values())
 tot_t1   = sum(e["total_t1"]         for e in estructuras.values())
 tot_t2   = sum(e["total_t2"]         for e in estructuras.values())
 total_perim = sum(e["perimetro"] for e in estructuras.values())
+
+# Molduras: a diferencia de las placas, un tramo de moldura se corta donde
+# haga falta (las esquinas ya son un corte natural), así que el sobrante de
+# la moldura de una habitación sirve para empezar la de la siguiente. Sumar
+# ceil(perímetro/4) POR HABITACIÓN redondea de más en cada una por separado
+# (ej. 15+11+14 m → ceil(15/4)+ceil(11/4)+ceil(14/4) = 4+3+4 = 11 un. = 44 m,
+# cuando en realidad 40 m de perímetro total entran en ceil(40/4) = 10 un.).
+# El número por habitación en "Estructura por habitación" queda como
+# referencia de cuánto perímetro tiene cada una; el total que se compra y se
+# cobra es el global, sin ese redondeo repetido.
+tot_mol  = math.ceil(total_perim / LARGO_MOLDURA) if total_perim > 0 else 0
 
 costo_placas = sum(conteo[l]*precios[l] for l in [4,5,6])
 costo_h      = tot_h_varillas * p_h
@@ -1449,7 +1464,10 @@ c1.metric("Área total",        f"{total_area:.2f} m²")
 c2.metric("Placas PVC",        f"{total_placas} un.")
 c3.metric("Soleras (2.6m)",    f"{tot_sol} un.")
 c4.metric("Montantes (2.6m)",  f"{tot_mon} un.")
-c5.metric("Molduras PVC (4m)", f"{tot_mol} un.")
+c5.metric("Molduras PVC (4m)", f"{tot_mol} un.",
+          help=f"Calculado sobre el perímetro TOTAL de la obra ({total_perim:.1f} m), "
+               f"no habitación por habitación: el sobrante de la moldura de una "
+               f"habitación se aprovecha para la siguiente.")
 c6.metric("Tarugos N°8",       f"{tot_tar} un.")
 
 st.write("")
@@ -1482,6 +1500,10 @@ st.info(f"**Mezcla óptima:** {desc_mix}{info_h}")
 # ═══════════════════════════════════════════════════════════════════════════
 
 st.subheader("🔧 Estructura por habitación")
+st.caption("La columna \"Molduras (por separado)\" es referencia de cuánta moldura "
+           "necesita CADA habitación sola. El total real a comprar es el del Resumen "
+           "de arriba: se calcula sobre el perímetro conjunto de la obra, porque el "
+           "sobrante de una habitación se puede usar en la siguiente.")
 
 filas_est = []
 for h in hab_info:
@@ -1493,7 +1515,7 @@ for h in hab_info:
         "Alt. susp.":   f"{h.get('altura',0.30):.2f}m",
         "Soleras":      e["total_soleras"],
         "Montantes":    e["total_montantes"],
-        "Molduras PVC": e["total_molduras"],
+        "Molduras (por separado)": e["total_molduras"],
         "Tarugos N°8":  e["total_tarugos_n8"],
         "Perfil H":     h_txt,
         "Torn. T1":     e["total_t1"],
