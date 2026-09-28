@@ -379,7 +379,23 @@ def resolver_optimo(piezas, lens, precios=None, kerf=0.0, limite_seg=15):
     # esperado cuando el optimizador exacto no está disponible.
     try:
         prob = pulp.LpProblem("corte_pvc", pulp.LpMinimize)
-        x = [pulp.LpVariable(f"x{k}", lowBound=0, cat="Integer") for k in range(len(columnas))]
+        try:
+            # Forma "clásica" (pulp <= 3.x): variable suelta, construida aparte
+            # del problema.
+            x = [pulp.LpVariable(f"x{k}", lowBound=0, cat="Integer") for k in range(len(columnas))]
+        except TypeError:
+            # pulp 4.x saca lowBound/upBound del constructor de LpVariable y
+            # pide agregarlas directamente al problema con prob.add_variable().
+            # Este fallback hace que el código siga funcionando aunque el
+            # entorno de despliegue termine con una versión más nueva que la
+            # pineada en requirements.txt.
+            AVISOS.append(
+                f"Se detectó una versión de pulp ({getattr(pulp, '__version__', '?')}) "
+                f"con la API nueva de LpVariable (probablemente pulp 4.x, no la "
+                f"pineada en requirements.txt); se usó la forma de construcción "
+                f"compatible con esa versión.")
+            x = [prob.add_variable(f"x{k}", lowBound=0, upBound=None, cat="Integer")
+                 for k in range(len(columnas))]
 
         def costo(L):
             base = precios[L] if usar_precio else L
