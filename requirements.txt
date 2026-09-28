@@ -1,7 +1,7 @@
 streamlit>=1.35.0
 pandas>=2.0.0
 reportlab>=4.0.0
-pulp>=2.7.0
+pulp==3.3.2
 gspread
 google-auth
 tzdata
