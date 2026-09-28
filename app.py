@@ -370,22 +370,31 @@ def resolver_optimo(piezas, lens, precios=None, kerf=0.0, limite_seg=15):
             f"el motor heurístico para esta combinación de largos.")
         return None
 
-    prob = pulp.LpProblem("corte_pvc", pulp.LpMinimize)
-    x = [pulp.LpVariable(f"x{k}", lowBound=0, cat="Integer") for k in range(len(columnas))]
-
-    def costo(L):
-        base = precios[L] if usar_precio else L
-        return base * 1000 + 1   # a igual costo, preferir menos placas
-
-    prob += pulp.lpSum(costo(L) * x[k] for k, (L, _) in enumerate(columnas))
-    for d in dims:
-        prob += pulp.lpSum(pat.get(d, 0) * x[k]
-                           for k, (_, pat) in enumerate(columnas)) >= demanda[d]
-
+    # Todo este bloque (construir variables, restricciones y resolver) depende
+    # de la versión instalada de pulp/CBC. Antes solo se atajaba
+    # PulpSolverError alrededor de prob.solve(); si algo fallaba armando el
+    # problema (por ejemplo un TypeError de una versión de pulp distinta a
+    # la usada en desarrollo), la excepción se escapaba y tumbaba toda la
+    # app en vez de caer a las heurísticas, que es el comportamiento
+    # esperado cuando el optimizador exacto no está disponible.
     try:
+        prob = pulp.LpProblem("corte_pvc", pulp.LpMinimize)
+        x = [pulp.LpVariable(f"x{k}", lowBound=0, cat="Integer") for k in range(len(columnas))]
+
+        def costo(L):
+            base = precios[L] if usar_precio else L
+            return base * 1000 + 1   # a igual costo, preferir menos placas
+
+        prob += pulp.lpSum(costo(L) * x[k] for k, (L, _) in enumerate(columnas))
+        for d in dims:
+            prob += pulp.lpSum(pat.get(d, 0) * x[k]
+                               for k, (_, pat) in enumerate(columnas)) >= demanda[d]
+
         prob.solve(pulp.PULP_CBC_CMD(msg=0, timeLimit=limite_seg))
-    except pulp.PulpSolverError as e:
-        AVISOS.append(f"El solver CBC falló al resolver el corte ({e}); se usó heurística.")
+    except Exception as e:
+        AVISOS.append(
+            f"El optimizador exacto (pulp) falló inesperadamente ({type(e).__name__}: {e}); "
+            f"se usó el motor heurístico para esta combinación de largos.")
         return None
     estado = pulp.LpStatus[prob.status]
     if estado in ("Infeasible", "Unbounded") or any(v.value() is None for v in x):
